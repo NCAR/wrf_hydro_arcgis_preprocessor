@@ -28,6 +28,7 @@ from itertools import takewhile, count                                          
 # --- End Module Configurations --- #
 
 # --- Globals --- #
+
 # Initiate dictionaries of GEOGRID projections and parameters
 #   See http://www.mmm.ucar.edu/wrf/users/docs/user_guide_V3/users_guide_chap3.htm#_Description_of_the_1
 projdict = {1: 'Lambert Conformal Conic',
@@ -38,18 +39,30 @@ CF_projdict = {1: "lambert_conformal_conic",
                 2: "polar_stereographic",
                 3: "mercator",
                 4: "latitude_longitude"}
+
+# Output file types
 outNCType = 'NETCDF4_CLASSIC'                                                   # Define the output netCDF version for RouteLink.nc and LAKEPARM.nc
 RTfmt = ["NC"]                                                                  # Set output RouteLink table format here ["CSV", "NC"], ["NC"], or ["CSV"]
 LKfmt = ["NC"]                                                                  # Set output LAKEPARM table format here ["NC", "TBL"], ["NC"], or ["TBL"]
+
+# Output file names
 LK_nc = 'LAKEPARM.nc'                                                           # Default Lake parameter table name
 RT_nc = 'Route_Link.nc'                                                         # Default Route Link parameter table name
 FullDom = 'Fulldom_hires.nc'                                                    # Default Full Domain routing grid nc file
 LDASFile = 'GEOGRID_LDASOUT_Spatial_Metadata.nc'                                # Defualt LDASOUT domain grid nc file
+
+# Other Global Variables
 NoDataVal = -9999                                                               # Default NoData value for gridded variables
 Threshold = 0.75                                                                # Minimum Lake Size threshold  (sq. km)
 walker = 3                                                                      # Number of cells to walk downstream before gaged catchment delineation
 LK_walker = 3                                                                   # Number of cells to walk downstream to get minimum lake elevation
 z_limit = 1000.0                                                                # Maximum fill depth (z-limit) between a sink and it's pour point
+
+#Custom Geotransformations for spheroid-to-sphere translation
+geoTransfmName = "GeoTransform_Null_WRFHydro"                                   # Custom Geotransformation Name
+customGeoTransfm = "GEOGTRAN[METHOD['Null']]"                                   # Null Transformation
+#customGeoTransfm = "GEOGTRAN[METHOD['Geocentric_Translation'],PARAMETER['X_Axis_Translation',''],PARAMETER['Y_Axis_Translation',''],PARAMETER['Z_Axis_Translation','']]"   # Zero-parameter Geocentric Translation
+
 # --- End Globals --- #
 
 # --- Classes --- #
@@ -220,8 +233,7 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
                 arcpy.AddMessage('  DY: %s' %DY)
                 sr = arcpy.SpatialReference()
                 sr.loadFromString(PE_string.replace('"', "'"))
-                #arcpy.AddMessage('Coordinate System: %s' %sr.exportToString())
-                point = arcpy.Point(GT[0], GT[3])
+                point = arcpy.Point(float(GT[0]), float(GT[3]) - float(DY*len(rootgrp.dimensions['y'])))    # Calculate LLCorner value from GeoTransform (ULCorner)
                 arcpy.env.outputCoordinateSystem = sr
                 for variablename, ncvar in rootgrp.variables.iteritems():
                     if ncvar.dimensions==('y', 'x'):
@@ -259,7 +271,7 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
                 continue
             else:
                 continue
-    del dirpath, dirnames, filenames, infile, file
+    del dirpath, dirnames, filenames
 
     # Remove each file from the temporary extraction directory
     for infile in dellist:
@@ -433,10 +445,10 @@ def georeference_geogrid_file(arcpy, in_nc, Variable):
     pointGeometry = arcpy.PointGeometry(point, sr1)
     projpoint = pointGeometry.projectAs(sr2)                                    # Optionally add transformation method:
 
-    # Get projected X and Y of the point geometry and adjust so lower left corner becomes lower left center
-    point2 = arcpy.Point((projpoint.firstPoint.X + (DX/2)),(projpoint.firstPoint.Y - (DY/2)))   # Adjust by half a grid cell
-    x00 = projpoint.firstPoint.X
-    y00 = projpoint.firstPoint.Y
+    # Get projected X and Y of the point geometry and adjust so lower left center becomes lower left corner
+    point2 = arcpy.Point((projpoint.firstPoint.X - (DX/2)),(projpoint.firstPoint.Y - (DY/2)))   # Adjust by half a grid cell
+    x00 = point2.X                                                              # X value doesn't change from LLcorner to UL corner
+    y00 = point2.Y + float(DY*data.shape[0])                                    # Adjust Y from LL to UL
 
     # Process: Numpy Array to Raster
     nc_raster = arcpy.NumPyArrayToRaster(data, point2, DX, DY, NoDataVal)
@@ -801,17 +813,12 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     boundaryPolygon = extent.polygon                                            # Added 2016-02-11 to simplify code
     extent1 = extent                                                            # Added 2016-02-11 to simplify code
 
-    # Now project the polygon object to the raster catalog spatial reference
+    # Now project the polygon object to the input high-resolution raster spatial reference
     sr3 = arcpy.Describe(in_raster).spatialReference
-    transform = arcpy.ListTransformations(sr2, sr3, extent)
-    if len(transform) >= 1:
-        loglines.append('    Tranformation: %s' %transform[0])
-        arcpy.AddMessage(loglines[-1])
-        projpoly = boundaryPolygon.projectAs(sr3, transform[0])                     # Should be: u'NAD_1983_To_WGS_1984_1'
-    else:
-        loglines.append('    Tranformation: None')
-        arcpy.AddMessage(loglines[-1])
-        projpoly = boundaryPolygon.projectAs(sr3)
+    arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
+    loglines.append('    Tranformation: %s' %geoTransfmName)
+    arcpy.AddMessage(loglines[-1])
+    projpoly = boundaryPolygon.projectAs(sr3, geoTransfmName)                     # Should be: u'NAD_1983_To_WGS_1984_1'
 
     # Create raster layer from input raster or mosaic dataset
     MosaicLayer = "MosaicLayer"
@@ -833,13 +840,9 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     mosprj = os.path.join(projdir, 'mosaicprj')
     descData = arcpy.Describe('hgt_m_Layer')
     extent = descData.Extent
-    transform = arcpy.ListTransformations(sr2, sr3, extent1)
     loglines.append('    Projecting input elevation data to WRF coordinate system.')
     arcpy.AddMessage(loglines[-1])
-    if len(transform) >= 1:
-        arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, "NEAREST", cellsize2, transform[0])
-    else:
-        arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, "NEAREST", cellsize2, "WGS_1984_(ITRF00)_To_NAD_1983")
+    arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, "NEAREST", cellsize2, geoTransfmName)
     loglines.append('      Finished projecting input elevation data to WRF coordinate system.')
     arcpy.AddMessage(loglines[-1])
     loglines.append('    The fine grid (before ExtractByMask) has %s rows and %s columns.' %(arcpy.Describe(mosprj).height, arcpy.Describe(mosprj).width))
