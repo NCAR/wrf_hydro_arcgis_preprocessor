@@ -75,7 +75,8 @@ Kc = 0                              # channel conductivity (mm/hour)
 OrificeC = 0.1
 OrificA = 1.0
 WeirC = 0.4
-WeirL = 0.0
+#WeirL = 0.0                                                                    # Old default weir length (0m)
+WeirL = 10.0                                                                    # New default prescribed by D. Yates 5/11/2017 (10m default weir length)
 
 #Custom Geotransformations for spheroid-to-sphere translation
 geoTransfmName = "GeoTransform_Null_WRFHydro"                                   # Custom Geotransformation Name
@@ -1618,7 +1619,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
 
         with open(LakeTBL, 'wb') as fp:
             a = csv.writer(fp, dialect='excel-tab', quoting=csv.QUOTE_NONE)
-            #a.writerow(['lake', 'LkArea', 'LkMxH', 'WeirC', 'WeirL', 'WeirH', 'OrificeC', 'OrificeA', 'OrificeE', 'lat', 'long', 'elevation'])
+            #a.writerow(['lake', 'LkArea', 'LkMxH', 'WeirC', 'WeirL', 'OrificeC', 'OrificeA', 'OrificeE', 'lat', 'long', 'elevation', 'WeirH'])
             for lkid in min_elevs.keys():
                 lkarea = float(areas[lkid])/float(1000000)                      # Divide by 1M for kilometers^2
                 lkmaxelev = max_elevs[lkid]
@@ -1627,7 +1628,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
                 cen_lat = cen_lats[lkid]
                 cen_lon = cen_lons[lkid]
                 WeirH = WeirH_vals[lkid]
-                a.writerow([lkid, lkarea, lkmaxelev, WeirC, WeirL, WeirH, OrificeC, OrificA, OrificeE, cen_lat, cen_lon, baseelev])   #COMID?
+                a.writerow([lkid, lkarea, lkmaxelev, WeirC, WeirL, OrificeC, OrificA, OrificeE, cen_lat, cen_lon, baseelev, WeirH])   #COMID?
 
         loglines.append('        Done writing LAKEPARM.TBL table to disk.')
         arcpy.AddMessage(loglines[-1])
@@ -1876,7 +1877,7 @@ def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, ce
 
         with open(LakeTBL, 'wb') as fp:
             a = csv.writer(fp, dialect='excel-tab', quoting=csv.QUOTE_NONE)
-            #a.writerow(['lake', 'LkArea', 'LkMxH', 'WeirC', 'WeirL', 'WeirH', 'OrificeC', 'OrificeA', 'OrificeE', 'lat', 'long', 'elevation'])
+            #a.writerow(['lake', 'LkArea', 'LkMxH', 'WeirC', 'WeirL', 'OrificeC', 'OrificeA', 'OrificeE', 'lat', 'long', 'elevation', 'WeirH'])
             for lkid in min_elevs.keys():
                 lkarea = float(areas[lkid])/float(1000000)                      # Divide by 1M for kilometers^2
                 lkmaxelev = max_elevs[lkid]
@@ -1885,7 +1886,7 @@ def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, ce
                 cen_lat = cen_lats[lkid]
                 cen_lon = cen_lons[lkid]
                 WeirH = WeirH_vals[lkid]
-                a.writerow([lkid, lkarea, lkmaxelev, WeirC, WeirL, WeirH, OrificeC, OrificA, OrificeE, cen_lat, cen_lon, baseelev])   #COMID?
+                a.writerow([lkid, lkarea, lkmaxelev, WeirC, WeirL, OrificeC, OrificA, OrificeE, cen_lat, cen_lon, baseelev, WeirH])   #COMID?
 
         loglines.append('        Done writing LAKEPARM.TBL table to disk.')
         arcpy.AddMessage(loglines[-1])
@@ -1972,6 +1973,28 @@ def adjust_to_landmask(arcpy, in_raster, LANDMASK, sr2, projdir, inunits):
     loglines.append('    Topography corrected to match coarse grid LANDMASK.')
     arcpy.AddMessage(loglines[-1])
     return mosprj2, loglines
+
+def build_groundwater_buckets(build_option=1):
+    '''
+    5/17/2017: This function will build the groundwater bucket grids and parameter
+               tables.
+
+    1) A set of basins must be provided. This is a grid of watershed pixels, in
+       which each value on the grid corresponds to a basin.
+
+    Build Options:
+        1) Build option 1 will biuld the groundwater buckets from ...
+
+    NOTES:
+       * Groundwater buckets are currently resolved on the LSM (coarse/GEOGRID)
+         grid. In the future this may change.
+       * The ID values for groundwater buckets must be numbered 1...n, and will
+         not directly reflect the COMID values of individual basins or pour points.
+         Much like the LAKEPARM and LAKEGRID values, a mapping must be made between
+         input basins/lakes and the outputs using the shapefiles/parameter tables
+         output by these tools.
+    '''
+    return
 
 def sa_functions(arcpy, rootgrp, basin_mask, mosprj, ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold, inunits, LU_INDEX, cellsize1, cellsize2, routing, in_lakes, lakeIDfield=None):
     """The last major function in the processing chain is to perform the spatial
@@ -2232,5 +2255,3 @@ if __name__ == '__main__':
     '''Protect this script against import from another script.'''
     pass
 # --- End Functions --- #
-if __name__ == '__main__':
-    pass

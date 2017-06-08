@@ -53,6 +53,7 @@ processing_notes_SM = '''Created: %s''' %time.ctime()
 processing_notesFD = '''Created: %s''' %time.ctime()
 
 # Default groundwater bucket (GWBUCKPARM) parameters
+Community = True                                                                # Switch to provide Community WRF-Hydro GWBUCKPARM outputs
 coeff = 1.0000
 expon = 3.000
 zmax = 50.00
@@ -141,13 +142,14 @@ class ProcessGeogridFile(object):
             parameterType="Optional",
             direction="Input")
 
-        in_LakeIDField = arcpy.Parameter(
-            displayName="ID field (Integer) for identifying lakes",
-            name="in_IDfield",
-            datatype="GPString",
-            parameterType="Optional",
-            direction="Input")
-        in_LakeIDField.filter.type = "ValueList"
+        # Removed 5/11/2017 to simplify creation of lake features (using 1...n ID scheme)
+        ##        in_LakeIDField = arcpy.Parameter(
+        ##            displayName="ID field (Integer) for identifying lakes",
+        ##            name="in_IDfield",
+        ##            datatype="GPString",
+        ##            parameterType="Optional",
+        ##            direction="Input")
+        ##        in_LakeIDField.filter.type = "ValueList"
 
         in_raster = arcpy.Parameter(
             displayName="Input Elevation Raster",
@@ -198,7 +200,7 @@ class ProcessGeogridFile(object):
             direction="Output")
         out_zip.value = 'WRF_Hydro_routing_grids.zip'
 
-        parameters = [in_nc, in_csv, basin_mask, RB_routing, Lake_routing, in_reservoirs, in_LakeIDField, in_raster, cellsize, threshold, ovroughrtfac_val, retdeprtfac_val, out_zip]
+        parameters = [in_nc, in_csv, basin_mask, RB_routing, Lake_routing, in_reservoirs, in_raster, cellsize, threshold, ovroughrtfac_val, retdeprtfac_val, out_zip]   #, in_LakeIDField
         return parameters
 
     def isLicensed(self):
@@ -225,16 +227,16 @@ class ProcessGeogridFile(object):
         # Only activate Lake input parameter and lake ID field parameter if requesting LAKEPARM file
         if parameters[4].value == True:
             parameters[5].enabled = True
-            parameters[6].enabled = True
+            #parameters[6].enabled = True
         else:
             parameters[5].enabled = False
-            parameters[6].enabled = False
+            #parameters[6].enabled = False
 
-        # Populate lake ID field combo box with list of Integer type fields from reservoirs shapefile
-        if parameters[5].altered:
-            in_lakes_file = parameters[5].valueAsText
-            FieldNames = [field.name for field in arcpy.ListFields(in_lakes_file, "", "Integer")]
-            parameters[6].filter.list = FieldNames
+        ##        # Populate lake ID field combo box with list of Integer type fields from reservoirs shapefile
+        ##        if parameters[5].altered:
+        ##            in_lakes_file = parameters[5].valueAsText
+        ##            FieldNames = [field.name for field in arcpy.ListFields(in_lakes_file, "", "Integer")]
+        ##            parameters[6].filter.list = FieldNames
 
     def updateMessages(self, parameters):
         """Modify the messages created by internal validation for each tool
@@ -259,13 +261,13 @@ class ProcessGeogridFile(object):
         routing = parameters[3].value
         Lake_routing = parameters[4].value
         in_reservoir = parameters[5].valueAsText
-        lakeIDfield = parameters[6].valueAsText
-        in_raster = parameters[7].valueAsText
-        cellsize = parameters[8].value
-        threshold = parameters[9].value
-        ovroughrtfac_val = parameters[10].value
-        retdeprtfac_val = parameters[11].value
-        out_zip = parameters[12].valueAsText
+        #lakeIDfield = parameters[6].valueAsText
+        in_raster = parameters[6].valueAsText
+        cellsize = parameters[7].value
+        threshold = parameters[8].value
+        ovroughrtfac_val = parameters[9].value
+        retdeprtfac_val = parameters[10].value
+        out_zip = parameters[11].valueAsText
 
         # Prepare output log file
         outtable = open(os.path.join(os.path.dirname(out_zip), os.path.basename(out_zip) + '.log'), "w")
@@ -276,9 +278,9 @@ class ProcessGeogridFile(object):
             loglines.append('    Parameter: %s: %s' %(param.displayName, param.valueAsText))
         outtable.writelines("\n".join(loglines) + "\n")
 
-        if lakeIDfield is None:
-            loglines = ['  No Lake ID Field provided']
-            arcpy.AddMessage(loglines[-1])
+        ##        if lakeIDfield is None:
+        ##            loglines = ['  No Lake ID Field provided']
+        ##            arcpy.AddMessage(loglines[-1])
 
         # Interpret the input for reservoir routing
         if Lake_routing is False:
@@ -357,7 +359,7 @@ class ProcessGeogridFile(object):
         try:
 
             # Step 4 - Hyrdo processing functions
-            rootgrp2, loglines = wrf_hydro_functions.sa_functions(arcpy, rootgrp2, basin_mask, mosprj, ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold, inunits, LU_INDEX, cellsize1, cellsize2, routing, in_lakes, lakeIDfield) # , mosprj2,
+            rootgrp2, loglines = wrf_hydro_functions.sa_functions(arcpy, rootgrp2, basin_mask, mosprj, ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold, inunits, LU_INDEX, cellsize1, cellsize2, routing, in_lakes)   #, lakeIDfield) # , mosprj2,
             outtable.writelines("\n".join(loglines) + "\n")
             rootgrp2.close()
             arcpy.Delete_management(LU_INDEX)                                   # Added 4/19/2017 to allow zipws to complete
@@ -1048,7 +1050,7 @@ class Reach_Based_Routing_Addition(object):
         arcpy.env.outputCoordinateSystem = sr
 
         # Change CHANNELGRID so that it has values of 1 and Null
-        strm = SetNull(arcpy.Raster('channelgrid'), 1, "VALUE = -9999")
+        strm = SetNull(arcpy.Raster('channelgrid'), 1, "VALUE = %s" %nodataVal)
 
         # Use topography raster to create reach-based routing files
         linkid, loglines = wrf_hydro_functions.Routing_Table(arcpy, projdir, sr, strm, fdir, fill2, order2, loglines)
@@ -1148,14 +1150,15 @@ class Lake_Parameter_Addition(object):
             parameterType="Required",
             direction="Input")
 
-        # Input parameter
-        in_LakeIDField = arcpy.Parameter(
-            displayName="ID field (INTEGER) for identifying lakes",
-            name="in_IDfield",
-            datatype="GPString",
-            parameterType="Optional",
-            direction="Input")
-        in_LakeIDField.filter.type = "ValueList"
+        # Removed 5/11/2017 to simplify creation of lake features (using 1...n ID scheme)
+        ##        # Input parameter
+        ##        in_LakeIDField = arcpy.Parameter(
+        ##            displayName="ID field (INTEGER) for identifying lakes",
+        ##            name="in_IDfield",
+        ##            datatype="GPString",
+        ##            parameterType="Optional",
+        ##            direction="Input")
+        ##        in_LakeIDField.filter.type = "ValueList"
 
         # Output parameter
         out_zip = arcpy.Parameter(
@@ -1165,7 +1168,7 @@ class Lake_Parameter_Addition(object):
             parameterType="Required",
             direction="Output")
 
-        parameters = [in_zip, in_reservoirs, in_LakeIDField, out_zip]
+        parameters = [in_zip, in_reservoirs, out_zip]   # , in_LakeIDField
         return parameters
 
     def isLicensed(self):
@@ -1182,10 +1185,10 @@ class Lake_Parameter_Addition(object):
         """Modify the values and properties of parameters before internal
         validation is performed.  This method is called whenever a parameter
         has been changed."""
-        if parameters[1].altered:
-            in_lakes_file = parameters[1].valueAsText
-            FieldNames = [field.name for field in arcpy.ListFields(in_lakes_file, "", "Integer")]
-            parameters[2].filter.list = FieldNames
+        ##        if parameters[1].altered:
+        ##            in_lakes_file = parameters[1].valueAsText
+        ##            FieldNames = [field.name for field in arcpy.ListFields(in_lakes_file, "", "Integer")]
+        ##            parameters[2].filter.list = FieldNames
         return
 
     def updateMessages(self, parameters):
@@ -1202,15 +1205,15 @@ class Lake_Parameter_Addition(object):
         # Gather all necessary parameters
         in_zip = parameters[0].valueAsText
         in_lakes = parameters[1].valueAsText
-        lakeIDfield = parameters[2].valueAsText
-        out_zip = parameters[3].valueAsText
+        #lakeIDfield = parameters[2].valueAsText
+        out_zip = parameters[2].valueAsText
 
         loglines = ['Begining processing on %s' %time.ctime()]
         arcpy.AddMessage('Beginning to extract WRF-Hydro routing grids...')
 
-        if lakeIDfield is None:
-            loglines = ['  No Lake ID Field provided']
-            arcpy.AddMessage(loglines[-1])
+        ##        if lakeIDfield is None:
+        ##            loglines = ['  No Lake ID Field provided']
+        ##            arcpy.AddMessage(loglines[-1])
 
         # Create scratch directory for temporary outputs
         projdir = arcpy.CreateScratchName("temp", data_type="Folder", workspace=arcpy.env.scratchFolder)
@@ -1234,7 +1237,7 @@ class Lake_Parameter_Addition(object):
         cellsize = channelgrid.meanCellHeight
 
         # Run the lake addition function
-        arcpy, channelgrid_arr, lakegrid_arr, loglines = wrf_hydro_functions.add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr, loglines, lakeIDfield)
+        arcpy, channelgrid_arr, lakegrid_arr, loglines = wrf_hydro_functions.add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr, loglines) # , lakeIDfield)
         del flac, fill2, channelgrid, sr, cellsize, in_lakes, in_zip
 
         # Add new LINKID grid to the FullDom file
@@ -1311,7 +1314,16 @@ class GWBUCKPARM(object):
             parameterType="Required",
             direction="Input")
         in_method.filter.type = "ValueList"
-        in_method.filter.list = ['FullDom basn_msk variable', 'FullDom LINKID local basins', 'Polygon shapefile'] #
+        in_method.filter.list = ['FullDom basn_msk variable', 'FullDom LINKID local basins', 'Polygon Shapefile or Feature Class'] #
+
+        # Input parameter
+        in_Polys = arcpy.Parameter(
+            displayName="Polygon feature class to define groundwater basins",
+            name="in_Polygons",
+            datatype="DEFeatureClass",
+            parameterType="Optional",
+            direction="Input")
+        in_Polys.enabled = False
 
         # Input parameter
         tbl_type = arcpy.Parameter(
@@ -1331,7 +1343,7 @@ class GWBUCKPARM(object):
             parameterType="Required",
             direction="Output")
 
-        parameters = [in_nc, in_geo, in_method, tbl_type, out_dir]
+        parameters = [in_nc, in_geo, in_method, in_Polys, tbl_type, out_dir]
         return parameters
 
     def isLicensed(self):
@@ -1347,7 +1359,15 @@ class GWBUCKPARM(object):
         """Modify the values and properties of parameters before internal
         validation is performed.  This method is called whenever a parameter
         has been changed."""
-        return
+
+        # Only activate masking if a CSV file has been input
+        if parameters[2].altered == True:
+            if parameters[2].valueAsText == 'Polygon Shapefile or Feature Class':
+                parameters[3].enabled = True
+            else:
+                parameters[3].enabled = False
+        else:
+            parameters[3].enabled = False
 
     def updateMessages(self, parameters):
         """Modify the messages created by internal validation for each tool
@@ -1363,8 +1383,9 @@ class GWBUCKPARM(object):
         in_nc = parameters[0].valueAsText
         in_geo = parameters[1].valueAsText
         in_method = parameters[2].valueAsText
-        tbl_type = parameters[3].valueAsText
-        out_dir = parameters[4].valueAsText
+        in_Polys = parameters[3].valueAsText
+        tbl_type = parameters[4].valueAsText
+        out_dir = parameters[5].valueAsText
 
         arcpy.AddMessage('Input parameters:')
         for param in parameters:
@@ -1390,22 +1411,16 @@ class GWBUCKPARM(object):
         if in_method == 'FullDom basn_msk variable':
             Variable = 'basn_msk'
             RLayer = Variable + '_Layer'
-            arcpy.MakeNetCDFRasterLayer_md(in_nc, Variable, 'x', 'y', RLayer)       # Create netCDF raster layer
-            GWBasns = arcpy.Raster(RLayer)                                        # Create raster object from raster layer
+            arcpy.MakeNetCDFRasterLayer_md(in_nc, Variable, 'x', 'y', RLayer)   # Create netCDF raster layer
+            GWBasns = arcpy.Raster(RLayer)                                      # Create raster object from raster layer
             GWBasns_arr = rootgrp1.variables[Variable][:]
 
-        elif in_method == 'FullDom LINKID local basins':
+            # Gather projection and set output coordinate system
+            descData = arcpy.Describe(GWBasns)
+            sr = descData.spatialReference
+            arcpy.env.outputCoordinateSystem = sr
 
-            ##                # Using netCDF4 library create raster from CHANNELGRID variable
-            ##                GT = rootgrp1.variables['ProjectionCoordinateSystem'].GeoTransform.split(" ")
-            ##                PE_string = rootgrp1.variables['ProjectionCoordinateSystem'].esri_pe_string
-            ##                arcpy.AddMessage('  GeoTransform: %s' %GT)
-            ##                DX = float(GT[1])
-            ##                DY = abs(float(GT[5]))                                          # In GeoTransform, Y is usually negative
-            ##                sr = arcpy.SpatialReference()
-            ##                sr.loadFromString(PE_string.replace('"', "'"))
-            ##                point = arcpy.Point(float(GT[0]), float(GT[3]) - float(DY*len(rootgrp1.dimensions['y'])))    # Calculate LLCorner value from GeoTransform (ULCorner)
-            ##                arcpy.env.outputCoordinateSystem = sr
+        elif in_method == 'FullDom LINKID local basins':
 
             if 'LINKID' not in rootgrp1.variables:
                 arcpy.AddMessage('  LINKID not found in FullDom file. Generating LINKID grid from CHANNELGRID and FLOWDIRECTION')
@@ -1422,7 +1437,6 @@ class GWBUCKPARM(object):
                         chgrid = SetNull(nc_raster, '1', 'VALUE < 0')
                     elif ncvarname == 'FLOWDIRECTION':
                         fdir = nc_raster
-                del nc_raster
 
                 # Gather projection and set output coordinate system
                 descdata = arcpy.Describe(chgrid)
@@ -1447,7 +1461,7 @@ class GWBUCKPARM(object):
                 arcpy.AddMessage('    Creating StreamLink grid')
                 strm = SetNull(outRaster, outRaster, "VALUE = %s" %nodataVal)
                 strm.save(os.path.join(projdir, 'LINKID'))
-                del chgrid
+                del chgrid, outRaster
 
             else:
                 arcpy.AddMessage('  LINKID found in FullDom file.')
@@ -1462,7 +1476,6 @@ class GWBUCKPARM(object):
                         strm.save(os.path.join(projdir, ncvarname))
                     elif ncvarname == 'FLOWDIRECTION':
                         fdir = nc_raster
-                del nc_raster
 
                 # Gather projection and set output coordinate system
                 descdata = arcpy.Describe(strm)
@@ -1473,65 +1486,130 @@ class GWBUCKPARM(object):
             GWBasns = Watershed(fdir, strm, 'Value')
             GWBasns_arr = arcpy.RasterToNumPyArray(GWBasns)
             arcpy.Delete_management(strm)
-            del strm, fdir
+            arcpy.Delete_management(nc_raster)
+            del strm, fdir, nc_raster
             arcpy.AddMessage('        Stream to features step complete.')
 
-        elif in_method == 'Polygon shapefile':
-            arcpy.AddMessage('Polygon Shapefile input not currently supported. Exiting')
-            raise SystemExit
+        elif in_method == 'Polygon Shapefile or Feature Class':
+            #arcpy.AddMessage('Polygon Shapefile input not currently supported. Exiting')
+            #raise SystemExit
+
+            # Gather fine grid information from FullDom gridded variable
+            Variable = 'TOPOGRAPHY'
+            RLayer = Variable + '_Layer'
+            arcpy.MakeNetCDFRasterLayer_md(in_nc, Variable, 'x', 'y', RLayer)   # Create netCDF raster layer
+            Topogrpahy = arcpy.Raster(RLayer)                                   # Create raster object from raster layer
+
+           # Gather projection and set output coordinate system
+            descData = arcpy.Describe(Topogrpahy)
+            sr = descData.spatialReference
+            arcpy.env.outputCoordinateSystem = sr
+            arcpy.env.snapRaster = Topogrpahy
+            arcpy.env.extent =  Topogrpahy
+            cellsize = descData.children[0].meanCellHeight
+            arcpy.env.cellSize = cellsize                                       # Set cellsize to fine grid
+
+            # Resolve basins on the fine grid
+            descData = arcpy.Describe(in_Polys)
+            GWBasnsFile = os.path.join(projdir, 'poly_basins')
+            arcpy.PolygonToRaster_conversion(in_Polys, descData.OIDFieldName, GWBasnsFile, "MAXIMUM_AREA", "", cellsize)
+            GWBasns = arcpy.Raster(GWBasnsFile)                                 # Create raster object from raster layer
+            GWBasns_arr = arcpy.RasterToNumPyArray(GWBasns)                     # Create array from raster
+            del descData
 
         # Read basin information from the array
         UniqueVals = numpy.unique(GWBasns_arr[:])
         UniqueVals = UniqueVals[UniqueVals>=0]                                  # Remove NoData, removes potential noData values (-2147483647)
-        arcpy.AddMessage('  Found %s basins in the file' %UniqueVals.shape)
+        arcpy.AddMessage('  Found %s basins in the watershed grid' %UniqueVals.shape)
+
+        # Resample to coarse grid
+        hgt_m_raster, sr2, Projection_String, map_pro, GeoTransform, loglines = wrf_hydro_functions.georeference_geogrid_file(arcpy, in_geo, 'HGT_M')
+        descData = arcpy.Describe(hgt_m_raster)
+        cellsize = descData.children[0].meanCellHeight
+        GW_BUCKS = os.path.join(out_dir, "GWBUCKS_orig")                        # These are groundwater buckets on the coarse grid before re-numbering 1...n
+        arcpy.Resample_management(GWBasns, GW_BUCKS, cellsize, "NEAREST")
+        del hgt_m_raster, sr2, Projection_String, map_pro, GeoTransform, loglines
 
         # Set NoData to Null
         arcpy.Delete_management(RLayer)
         del GWBasns_arr
 
-        # Resample to coarse grid
-        hgt_m_raster, sr2, Projection_String, map_pro, GeoTransform, loglines = wrf_hydro_functions.georeference_geogrid_file(arcpy, in_geo, 'HGT_M')
-        arcpy.AddMessage("\n".join(loglines) + "\n")
-        descData = arcpy.Describe(hgt_m_raster)
-        cellsize = descData.children[0].meanCellHeight
-        GW_BUCKS = os.path.join(projdir, "GWBUCKS")
-        arcpy.Resample_management(GWBasns, GW_BUCKS, cellsize, "NEAREST")
-        del hgt_m_raster, sr2, Projection_String, map_pro, GeoTransform, loglines
-        arcpy.env.cellSize = cellsize                                           # Set cellsize to coarse grid
-        outASCII = os.path.join(out_dir, wrf_hydro_functions.GW_ASCII)
-        arcpy.RasterToASCII_conversion(GW_BUCKS, outASCII)
-        arcpy.AddMessage('    Process: gw_basns_geogrid.txt completed without error')
-        GWBasns_arr2 = arcpy.RasterToNumPyArray(GW_BUCKS)
-
-        # Read basin information from the array
+        # Re-assign basin IDs to 1...n because sometimes the basins get lost when converting to coarse grid
+        GWBasns_arr2 = arcpy.RasterToNumPyArray(GW_BUCKS, nodata_to_value=nodataVal)
         UniqueVals2 = numpy.unique(GWBasns_arr2[:])
-        UniqueVals2 = UniqueVals2[UniqueVals2>=0]                               # Remove NoData, removes potential noData values (-2147483647)
+        #UniqueVals2 = UniqueVals2[UniqueVals2>=0]                               # Remove NoData/-9999, also removes potential noData values (-2147483647)
+        #UniqueVals2 = UniqueVals2[UniqueVals2!=nodataVal]
         arcpy.AddMessage('Found %s basins in the file after resampling to the coarse grid.' %UniqueVals2.shape)
 
+        # Old, slower reclassify using list
+        ##newIDs = {val:num+1 for num,val in enumerate(UniqueVals2)}              # New ID values are 1...n, stored in a dictionary
+        ##GW_BUCKS = Reclassify(GW_BUCKS, "Value", RemapValue([list(item) for item in newIDs.iteritems()]))     # Arcpy Reclassify function (slow for large datasets)
+
+        # Fast replace loop from https://stackoverflow.com/questions/3403973/fast-replacement-of-values-in-a-numpy-array
+        sort_idx = numpy.argsort(UniqueVals2)                                   # Index of each unique value
+        idx = numpy.searchsorted(UniqueVals2, GWBasns_arr2, sorter=sort_idx)    # 2D array of index values?
+        #to_values = numpy.arange(1,UniqueVals2.size+1)                          # 1..n values to be substituted
+
+        # This method requires the nodata value to be issued a 0 index in sort_idx and idx
+        to_values = numpy.arange(UniqueVals2.size)                              # 0..n values to be substituted, 0 in place of nodataVal
+        new_ndv = int(to_values[numpy.where(UniqueVals2==nodataVal)[0]][0])             # Obtain the newly-assigned nodatavalue
+
+        #
+        GWBasns_arr3 = to_values[idx]                                           # Same as to_values[sort_idx][idx]
+        ll = arcpy.Point(descData.extent.XMin, descData.extent.YMin)            # Reaster lower left corner
+        GW_BUCKS = arcpy.NumPyArrayToRaster(GWBasns_arr3, lower_left_corner=ll, x_cell_size=cellsize, y_cell_size=cellsize, value_to_nodata=new_ndv)
+        GW_BUCKS2 = os.path.join(out_dir, "GWBUCKS")
+        GW_BUCKS.save(GW_BUCKS2)                                                # Save raster
+        #arcpy.Delete_management(GW_BUCKS)
+
+        # Save 2D NC file of GW Buckets?
+
+        # Output to ASCII file
+        arcpy.env.cellSize = cellsize                                           # Set cellsize to coarse grid
+        outASCII = os.path.join(out_dir, wrf_hydro_functions.GW_ASCII)
+        arcpy.RasterToASCII_conversion(GW_BUCKS2, outASCII)
+        arcpy.AddMessage('    Process: gw_basns_geogrid.txt completed without error')
+
+        # Remove header (first 6 rows) from ASCII Raster
+        f = open(outASCII,'r+')                                                 # Open the file in read/write mode
+        lines = f.readlines()[6:]                                               # Read everything after the first 6 header lines
+        f.seek(0)                                                               # Reset cursor to the start of the file
+        f.writelines(lines)                                                     # Write the non-header lines back to the file
+        f.close()                                                               # Close the file
+        del f, lines                                                            # Clean up
+
         # Raster to Polygon conversion
-        out_basins = os.path.join(r'in_memory\out_basins')
-        arcpy.RasterToPolygon_conversion(GW_BUCKS, out_basins, "NO_SIMPLIFY", "VALUE")
+        out_basins = 'in_memory\out_basins'                                     # Original Raster to Polygon layer
+        out_basins2 = os.path.join(out_dir, 'GW_basins.shp')                    # Dissolved basin polygons (to eliminate polygon parts)
+        arcpy.RasterToPolygon_conversion(GW_BUCKS2, out_basins, "NO_SIMPLIFY", "VALUE")
+        arcpy.Dissolve_management(out_basins, out_basins2, "gridcode", "", "MULTI_PART", "DISSOLVE_LINES")  # Dissolve to create singlepart features
         arcpy.Delete_management(GWBasns)
-        arcpy.Delete_management(GW_BUCKS)
         del GWBasns, GW_BUCKS
+
+        # Is there a need to compute the size of each basin?
 
         # Gather the catchment ComID values based on the automatically-generated 'gridcode' field
         arcpy.AddMessage('Calculating size and ID parameters for basin polygons.')
-        cat_comids = [item[0] for item in arcpy.da.SearchCursor(out_basins, 'gridcode')]
-        cat_areas = [item[0].getArea('GEODESIC', 'SQUAREKILOMETERS') for item in arcpy.da.SearchCursor(out_basins, "SHAPE@")]
-        #arcpy.Delete_management(out_basins)
+        cat_comids = [item[0] for item in arcpy.da.SearchCursor(out_basins2, 'gridcode')]
+        cat_areas = [item[0].getArea('GEODESIC', 'SQUAREKILOMETERS') for item in arcpy.da.SearchCursor(out_basins2, "SHAPE@")]
+        arcpy.Delete_management(out_basins)
+        #arcpy.Delete_management(out_basins2)
 
         # Build output files
         if tbl_type in ['.TBL', '.nc and .TBL']:
             arcpy.AddMessage('Writing output bucket paramter table as .TBL (ASCII) format.')
             out_file = os.path.join(out_dir, 'GWBUCKPARM.TBL')
             fp = open(out_file, 'wb')                                           # Build Bucket parameter table
-            #fp.write('Basin,Coeff.,Expon.,Zmax,Zinit,Area_sqkm,ComID\n')
-            counter = 1
+            if Community:
+                fp.write('Basin,Coeff,Expon,Zmax,Zinit\n')                      # Header for Community WRF-Hydro
+            else:
+                fp.write('Basin,Coeff.,Expon.,Zmax,Zinit,Area_sqkm,ComID\n')    # Header for NWM WRF-Hydro
             for ID, AREA in zip(cat_comids,cat_areas):
-                newline = '{0:>8},{1:>6.4f},{2:>6.3f},{3:>6.2f},{4:>7.4f},{5:>11.3f},{6:>8}\n'.format(counter, coeff, expon, zmax, zinit, AREA, ID)
+                if Community:
+                    newline = '{0:>8},{1:>6.4f},{2:>6.3f},{3:>6.2f},{4:>7.4f}\n'.format(ID, coeff, expon, zmax, zinit)
+                else:
+                    newline = '{0:>8},{1:>6.4f},{2:>6.3f},{3:>6.2f},{4:>7.4f},{5:>11.3f},{6:>8}\n'.format(ID, coeff, expon, zmax, zinit, AREA, ID)
                 fp.write(newline)
-                counter += 1
             fp.close()
             arcpy.AddMessage('Created output bucket parameter table (.TBL): %s. ' %out_file)
 
@@ -1567,7 +1645,8 @@ class GWBUCKPARM(object):
             rootgrp2.history = 'Created %s' %time.ctime()
 
             # Fill in variables
-            Basins[:] = numpy.arange(1,len(cat_comids)+1)
+            #Basins[:] = numpy.arange(1,len(cat_comids)+1)
+            Basins[:] = cat_comids
             coeffs[:] = coeff
             Expons[:] = expon
             Zmaxs[:] = zmax
