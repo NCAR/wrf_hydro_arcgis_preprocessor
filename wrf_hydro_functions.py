@@ -57,10 +57,11 @@ GW_nc = 'GWBUCKPARM.nc'                                                         
 GWGRID_nc = 'GWBASINS.nc'
 GW_ASCII = 'gw_basns_geogrid.txt'                                               # Default Groundwater Basins ASCII grid output
 GW_TBL = 'GWBUCKPARM.TBL'
+StreamSHP = 'Streams.shp'                                                       # Default streams shapefile name
 
 # Options
 maskRL = False                                                                  # Allow masking of channels in RouteLink file. May cause WRF-Hydro to crash if True
-PpVersion = 'v5 (01/2018)'                                                      # WRF-Hydro ArcGIS Pre-processor version to add to FullDom metadata
+PpVersion = 'v5 (03/2018)'                                                      # WRF-Hydro ArcGIS Pre-processor version to add to FullDom metadata
 CFConv = 'CF-1.5'                                                               # CF-Conventions version to place in the 'Conventions' attribute of RouteLink files
 
 # Other Global Variables
@@ -69,6 +70,7 @@ walker = 3                                                                      
 LK_walker = 3                                                                   # Number of cells to walk downstream to get minimum lake elevation
 z_limit = 1000.0                                                                # Maximum fill depth (z-limit) between a sink and it's pour point
 lksatfac_val = 1000.0                                                           # Default LKSATFAC value (unitless coefficient)
+minDepth = 1.0                                                                  # Minimum active lake depth for lakes with no elevation variation
 
 # Global attributes for altering the sphere radius used in computations. Do not alter sphere_radius for standard WRF-Hydro simulations
 sphere_radius = 6370000.0                                                       # Radius of sphere to use (WRF Default = 6370000.0m)
@@ -90,13 +92,13 @@ pointCF = True                                                                  
 pointSR = 4326                                                                  # The spatial reference system of the point time-series netCDF files (RouteLink, LAKEPARM). NAD83=4269, WGS84=4326
 
 # Channel Routing default parameters
-Qi = 0                              # Initial Flow in link (cms)
-MusK = 3600                         # Muskingum routing time (s)
-MusX = 0.2                          # Muskingum weighting coefficient
-n = 0.035                           # Manning's roughness
-ChSlp = 0.05                        # Channel Side Slope (%; drop/length)
-BtmWdth = 5                         # Bottom Width of Channel (m)
-Kc = 0                              # channel conductivity (mm/hour)
+Qi = 0                                                                          # Initial Flow in link (cms)
+MusK = 3600                                                                     # Muskingum routing time (s)
+MusX = 0.2                                                                      # Muskingum weighting coefficient
+n = 0.035                                                                       # Manning's roughness
+ChSlp = 0.05                                                                    # Channel Side Slope (%; drop/length)
+BtmWdth = 5                                                                     # Bottom Width of Channel (m)
+Kc = 0                                                                          # channel conductivity (mm/hour)
 
 #Default Lake Routing parameters
 OrificeC = 0.1
@@ -104,14 +106,14 @@ OrificA = 1.0
 WeirC = 0.4
 WeirL = 10.0                                                                    # New default prescribed by D. Yates 5/11/2017 (10m default weir length). Old default weir length (0.0m).
 ifd_Val = 0.90                                                                  # Default initial fraction water depth (90%)
-out_LKtype = ['nc', 'ascii']                                                    # Default output lake parameter file format ['nc', 'ascii']
+out_LKtype = ['nc']                                                             # Default output lake parameter file format ['nc', 'ascii']
 
 # Default groundwater bucket (GWBUCKPARM) parameters
 coeff = 1.0000                                                                  # Bucket model coefficient
 expon = 3.000                                                                   # Bucket model exponent
 zmax = 50.00                                                                    # Conceptual maximum depth of the bucket
 zinit = 10.0000                                                                 # Initial depth of water in the bucket model
-out_2Dtype = ['nc', 'ascii']                                                    # Default output 2D groundwater bucket grid format ['nc', 'ascii']
+out_2Dtype = ['nc']                                                             # Default output 2D groundwater bucket grid format ['nc', 'ascii']
 
 #Custom Geotransformations for spheroid-to-sphere translation
 geoTransfmName = "GeoTransform_Null_WRFHydro"                                   # Custom Geotransformation Name
@@ -254,6 +256,12 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
                 shutil.copy2(infile, out_folder)
                 arcpy.AddMessage('  File Copied: %s' %file)
 
+            # Ignore the GEOGRID LDASOUT spatial metadata file
+            if file == LDASFile:
+                shutil.copy2(infile, out_folder)
+                arcpy.AddMessage('  File Copied: %s' %file)
+                continue
+
             if file.endswith('.nc'):
 
                 # Trap to eliminate Parameter tables in NC format from this extraction
@@ -294,13 +302,6 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
                 del file, infile, rootgrp, ncvar
                 continue
 
-            if file.endswith('.txt'):
-                #shutil.copy2(infile, out_folder)
-                #arcpy.AddMessage('  File Created: %s' %file)
-                del file
-                # Change was made around 09/2017 to remove ASCII raster header from gw_basins_geogrid.txt ACII raster. Thus, ASCIIToRaster is no longer usable
-                continue
-
             if file.endswith('.shp'):
                 newshp = os.path.join(out_folder, file)
                 arcpy.CopyFeatures_management(infile, newshp)
@@ -309,7 +310,8 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
                 continue
 
             # These file formats are legacy output files, but allow the tool to work with older routing stacks
-            if file.endswith('.csv') or file.endswith('.TBL'):
+            if file.endswith('.csv') or file.endswith('.TBL') or file.endswith('.txt') or file.endswith('.prj'):
+                # Change was made around 09/2017 to remove ASCII raster header from gw_basins_geogrid.txt ACII raster. Thus, ASCIIToRaster is no longer usable
                 shutil.copy2(infile, out_folder)
                 arcpy.AddMessage('  File Created: %s' %file)
                 del file, infile
@@ -323,6 +325,26 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
         os.remove(infile)
     arcpy.AddMessage('Extraction of WRF routing grids completed.')
     return out_sfolder
+
+def recalculate_corners():
+    '''
+    9/29/2017
+    This function is designed to recalculate the 'corner_lats' and 'corner_lons'
+    global attributes of a WPS-generated GEOGRID file. This may be necessary when
+    a domain consists of a subsetted GEOGRID file, which is often the case with
+    cutouts from the National Water Model.
+
+    For more description on the corner_lats and corner_lons attributes, see WPS documentation:
+        http://www2.mmm.ucar.edu/wrf/users/docs/user_guide_V3/users_guide_chap3.htm
+    '''
+
+    # Initiate timer
+    tic1 = time.time()
+
+    #
+
+    arcpy.AddMessage('Finished recalculating corner_lats and corner_lons attributes in %3.2f seconds.' %(time.time()-tic1))
+    return
 
 def georeference_geogrid_file(arcpy, in_nc, Variable):
     """
@@ -420,12 +442,12 @@ def georeference_geogrid_file(arcpy, in_nc, Variable):
                              'PARAMETER["latitude_of_origin",' + str(latitude_of_origin) + '],'
                              'UNIT["Meter",1.0]]')
         proj4 = ("+proj=lcc +units=m +a={} +b={} +lat_1={} +lat_2={} +lat_0={} +lon_0={} +x_0=0 +y_0=0 +k_0=1.0 +nadgrids=@null +wktext  +no_defs ".format(
-        			         sphere_radius,
-        			         sphere_radius,
-        			         standard_parallel_1,
-        			         standard_parallel_2,
-        			         latitude_of_origin,
-        			         central_meridian))
+        			         str(sphere_radius),
+        			         str(sphere_radius),
+        			         str(standard_parallel_1),
+        			         str(standard_parallel_2),
+        			         str(latitude_of_origin),
+        			         str(central_meridian)))
 
     elif map_pro == 2:
         # Polar Stereographic
@@ -460,11 +482,11 @@ def georeference_geogrid_file(arcpy, in_nc, Variable):
                              'PARAMETER["Latitude_Of_Origin",' + str(standard_parallel_1) + '],'
                              'UNIT["Meter",1.0]]')
         proj4 = ("+proj=stere +units=meters +a={} +b={} +lat0={} +lon_0={} +lat_ts={}".format(
-				                sphere_radius,
-								sphere_radius,
-								pole_latitude,
-								central_meridian,
-								standard_parallel_1))
+				                str(sphere_radius),
+								str(sphere_radius),
+								str(pole_latitude),
+								str(central_meridian),
+								str(standard_parallel_1)))
 
     elif map_pro == 3:
         # Mercator Projection
@@ -481,10 +503,10 @@ def georeference_geogrid_file(arcpy, in_nc, Variable):
                              'PARAMETER["Standard_Parallel_1",' + str(standard_parallel_1) + '],'
                              'UNIT["Meter",1.0]]')
         proj4 = ("+proj=merc +units=meters +a={} +b={} +lon_0={} +lat_ts={}".format(
-								sphere_radius,
-								sphere_radius,
-								central_meridian,
-								standard_parallel_1))
+								str(sphere_radius),
+								str(sphere_radius),
+								str(central_meridian),
+								str(standard_parallel_1)))
 
     elif map_pro == 6:
         # Cylindrical Equidistant (or Rotated Pole)
@@ -514,7 +536,7 @@ def georeference_geogrid_file(arcpy, in_nc, Variable):
                                  'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
                                  'PARAMETER["Standard_Parallel_1",' + str(standard_parallel_1) + '],'
                                  'UNIT["Meter",1.0]]')                          # 'UNIT["Degree", 1.0]]') # ?? For lat-lon grid?
-            proj4 = ("+proj=eqc +units=meters +a={} +b={} +lon_0={}".format(sphere_radius, sphere_radius, central_meridian))
+            proj4 = ("+proj=eqc +units=meters +a={} +b={} +lon_0={}".format(str(sphere_radius), str(sphere_radius), str(central_meridian)))
 
     sr2.loadFromString(Projection_String)
 
@@ -658,7 +680,7 @@ def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict,
     using the getxy function."""
 
     tic1 = time.time()
-    loglines.append('    Creating CF-netCDF File.')
+    loglines.append('Creating CF-netCDF File.')
     arcpy.AddMessage(loglines[-1])
 
     # Gather projection information from input raster projection
@@ -667,24 +689,24 @@ def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict,
     dim2size = descData.height
     srType = sr.type
     PE_string = sr.exportToString().replace("'", '"')                                     # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
-    loglines.append('      Esri PE String: %s' %PE_string)
+    loglines.append('    Esri PE String: %s' %PE_string)
     arcpy.AddMessage(loglines[-1])
 
     # Find name for the grid mapping
     if CF_projdict.get(map_pro) is not None:
         grid_mapping = CF_projdict[map_pro]
-        loglines.append('      Map Projection of input raster : %s' %grid_mapping)
+        loglines.append('    Map Projection of input raster : %s' %grid_mapping)
         arcpy.AddMessage(loglines[-1])
     else:
         #grid_mapping = sr.name
         grid_mapping = 'crs'                                                    # Added 10/13/2017 by KMS to generalize the coordinate system variable names
-        loglines.append('      Map Projection of input raster (not a WRF projection): %s' %grid_mapping)
+        loglines.append('    Map Projection of input raster (not a WRF projection): %s' %grid_mapping)
         arcpy.AddMessage(loglines[-1])
 
     # Create Dimensions
     dim_y = rootgrp.createDimension('y', dim2size)
     dim_x = rootgrp.createDimension('x', dim1size)
-    loglines.append('      Dimensions created after {0: 8.2f} seconds.'.format(time.time()-tic1))
+    loglines.append('    Dimensions created after {0: 8.2f} seconds.'.format(time.time()-tic1))
     arcpy.AddMessage(loglines[-1])
 
     # Create coordinate variables
@@ -694,7 +716,7 @@ def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict,
     # Must handle difference between ProjectionCoordinateSystem and LatLonCoordinateSystem
     if srType == 'Geographic':
         if crsVarname:
-            CoordSysVarName = CF_projdict[0]
+            CoordSysVarName = crsVar
         else:
             CoordSysVarName = "LatLonCoordinateSystem"
 
@@ -710,7 +732,7 @@ def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict,
 
     elif srType == 'Projected':
         if crsVarname:
-            CoordSysVarName = CF_projdict[0]
+            CoordSysVarName = crsVar
         else:
             CoordSysVarName = "ProjectionCoordinateSystem"
         #proj_units = sr.linearUnitName.lower()                                  # sr.projectionName wouldn't work for a GEOGCS
@@ -746,26 +768,22 @@ def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict,
 
     # Get x and y variables for the netCDF file
     xmap, ymap, loglines2 = getxy(blank, projdir, [])
-    #xmap, ymap, loglines2 = getxy(in_raster, projdir, [])
     arcpy.Delete_management(blank)
     del blank, descData
     loglines += loglines2
     ymaparr = arcpy.RasterToNumPyArray(ymap)
     xmaparr = arcpy.RasterToNumPyArray(xmap)
-
-    # Assumes even spacing in y across domain
-    var_y[:] = ymaparr[:,0]
-    var_x[:] = xmaparr[0,:]
+    var_y[:] = ymaparr[:,0]                                                     # Assumes even spacing in y across domain
+    var_x[:] = xmaparr[0,:]                                                     # Assumes even spacing in x across domain
     arcpy.Delete_management(xmap)
     arcpy.Delete_management(ymap)
     del xmap, ymap, loglines2
-
-    loglines.append('      Coordinate variables and variable attributes set after {0: 8.2f} seconds.'.format(time.time()-tic1))
+    loglines.append('    Coordinate variables and variable attributes set after {0: 8.2f} seconds.'.format(time.time()-tic1))
     arcpy.AddMessage(loglines[-1])
 
     if addLatLon == True:
 
-        loglines.append('      Proceeding to add LATITUDE and LONGITUDE variables after {0: 8.2f} seconds.'.format(time.time()-tic1))
+        loglines.append('    Proceeding to add LATITUDE and LONGITUDE variables after {0: 8.2f} seconds.'.format(time.time()-tic1))
         arcpy.AddMessage(loglines[-1])
 
         # Populate this file with 2D latitude and longitude variables
@@ -833,24 +851,25 @@ def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict,
             lon_WRF[:] = xoutarr
             del xout, yout, youtarr, xoutarr, in_raster
 
-            loglines.append('      Variables populated after {0: 8.2f} seconds.'.format(time.time()-tic1))
+            loglines.append('    Variables populated after {0: 8.2f} seconds.'.format(time.time()-tic1))
             arcpy.AddMessage(loglines[-1])
-            loglines.append('      Process completed without error.')
+            loglines.append('    Process completed without error.')
             arcpy.AddMessage(loglines[-1])
 
-            loglines.append('      LATITUDE and LONGITUDE variables and variable attributes set after {0: 8.2f} seconds.'.format(time.time()-tic1))
+            loglines.append('    LATITUDE and LONGITUDE variables and variable attributes set after {0: 8.2f} seconds.'.format(time.time()-tic1))
             arcpy.AddMessage(loglines[-1])
 
         except Exception as e:
-            loglines.append('      Process did not complete. Error: %s' %e)
+            loglines.append('    Process did not complete. Error: %s' %e)
             arcpy.AddMessage(loglines[-1])
 
     # Global attributes
     rootgrp.GDAL_DataType = 'Generic'
     rootgrp.Source_Software = 'WRF-Hydro GIS Pre-processor %s' %PpVersion
+    rootgrp.proj4 = proj4                                                       # Added 3/16/2018 (KMS) to avoid a warning in WRF-Hydro output
     rootgrp.history = 'Created %s' %time.ctime()
     rootgrp.processing_notes = notes
-    loglines.append('      netCDF global attributes set after {0: 8.2f} seconds.'.format(time.time()-tic1))
+    loglines.append('    netCDF global attributes set after {0: 8.2f} seconds.'.format(time.time()-tic1))
     arcpy.AddMessage(loglines[-1])
 
     # Return the netCDF file to the calling script
@@ -882,21 +901,31 @@ def domain_shapefile(arcpy, in_raster, out_shp, sr2):
     arcpy.RasterToPolygon_conversion(outConstRaster, out_shp, "NO_SIMPLIFY")    #, "VALUE")
 
     # Clean up
+    arcpy.Delete_management(outConstRaster)
     arcpy.AddMessage('    Finished building GEOGRID domain boundary shapefile: %s.' %out_shp)
 
 def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, projdir):
-    """The second step creates a high resolution topography raster using a hydrologically-
+    """
+    The second step creates a high resolution topography raster using a hydrologically-
     corrected elevation dataset (currently either HydroSHEDS or NHDPlusv2).
 
     Changes made 01/26/2018 allow methods to change depending on the ArcGIS version
     available. A bug in ArcGIS 10.4 and 10.5 (Esri BUG-000096495) prevents a Custom
     Geotransformation from being used. Thus, the script determines the ArcGIS version
-    and if > 10.3, will attempt to fake a NULL transformation. However, some slight
-    errors in the spatial location of topographic elements has been noted."""
+    and if it is 10.4 or 10.5, will attempt to fake a NULL transformation. However,
+    some slight errors in the spatial location of topographic elements has been noted
+    for these versions.
+
+    3/28/2018: ArcGIS 10.6 allows custom transformations, but arcpy does not allow
+    the custom geotransformation to be specified by name.
+    """
 
     # Get ArcGIS version information and checkout Spatial Analyst extension
     ArcVersion = arcpy.GetInstallInfo()['Version']                              # Get the ArcGIS version that is being used
-    ArcVersionF = float(ArcVersion.rpartition('.')[0])                          # ArcGIS major release version as a float
+    if ArcVersion.count('.') == 2:
+        ArcVersionF = float(ArcVersion.rpartition('.')[0])                      # ArcGIS major release version as a float
+    else:
+        ArcVersionF = float(ArcVersion)                                         # ArcGIS major release version as a float
     if arcpy.CheckExtension("Spatial") == "Available":
         arcpy.CheckOutExtension("Spatial")
         from arcpy.sa import *
@@ -926,11 +955,11 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
 
     # Create a projected boundary polygon of the model domain with which to clip the in_raster
     sr3 = arcpy.Describe(in_raster).spatialReference                            # Obtain the SRS object for the input high-resolution DEM
-    if ArcVersionF > 10.3:
+    if ArcVersionF > 10.3 and ArcVersionF < 10.6:
         # Create two new geographic coordinate systems; one for projecting the model boundary polygon geometry,
         #   and one for projecting the input high resolution DEM (in_raster). In each one, the datum from the
-        #   other dataset will be subsitutded, such that we can perform a 'Null'-like transformation.
-        loglines.append('   WARNING: ArcGIS version %s detected.  Work-around for ESRI BUG-000096495 being implemented. Check output to ensure proper spatial referencing of topographic features in output data.' %ArcVersion)
+        #   other dataset will be substituted, such that we can perform a 'Null'-like transformation.
+        loglines.append('    WARNING: ArcGIS version %s detected.  Work-around for ESRI BUG-000096495 being implemented. Check output to ensure proper spatial referencing of topographic features in output data.' %ArcVersion)
         arcpy.AddMessage(loglines[-1])
         modelSR_GCS = sr2.GCS.exportToString().split(';')[0]                    # Find the GCS sub-string for the model SRS
         DEMSR_GCS = sr3.GCS.exportToString().split(';')[0]                      # Find the GCS sub-string for the input high-resolution DEM SRS
@@ -942,12 +971,16 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
         sr5.loadFromString(DEMSR2)                                              # Load SRS from altered string
         del modelSR_GCS, DEMSR_GCS, modelSR2, DEMSR2
         projpoly = boundaryPolygon.projectAs(sr5)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS
-    elif ArcVersionF == 10.3:
+    elif ArcVersionF <= 10.3:
         arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
         loglines.append('    Tranformation: %s' %geoTransfmName)
         arcpy.AddMessage(loglines[-1])
         projpoly = boundaryPolygon.projectAs(sr3, geoTransfmName)               # Reproject the boundary polygon from the WRF domain to the input raster CRS using custom geotransformation
-        #projpoly = boundaryPolygon.projectAs(sr3)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS
+    elif ArcVersionF == 10.6:
+        # Custom geotransformation appears not to be a valid input to the .projectAs geometry tool in ArcGIS 10.6
+        # However, if you create a custom geotransformation beforehand, then it will be respected bye the projectAs function
+        arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
+        projpoly = boundaryPolygon.projectAs(sr3) # Reproject the boundary polygon from the WRF domain to the input raster CRS
     polyextent = projpoly.extent
     del projpoly, boundaryPolygon
 
@@ -970,17 +1003,17 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     # Alter the method of reprojection depending on the ArcGIS version
     loglines.append('    Projecting input elevation data to WRF coordinate system.')
     arcpy.AddMessage(loglines[-1])
-    if ArcVersionF > 10.3:
+    if ArcVersionF > 10.3 and ArcVersionF < 10.6:
         '''If the ArcGIS Version is 10.3. or 10.3.1, then a Null Custom Geotransformation
         may be used to appropriately transform data between sphere and spheroid without
         applying any translation.'''
-        loglines.append('    ArcGIS version > 10.3 found (%s). No Custom Geotransformation used.' %ArcVersion)
+        loglines.append('    ArcGIS version > 10.3 & < 10.6 found (%s). No Custom Geotransformation used.' %ArcVersion)
         arcpy.AddMessage(loglines[-1])
         arcpy.DefineProjection_management(MosaicLayer, sr5)                     # Reset the projection to the model SRS
         arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr4, ElevResampleMethod, cellsize2)
         arcpy.DefineProjection_management(MosaicLayer, sr3)                     # Put it back to the way it was
-    elif ArcVersionF == 10.3:
-        loglines.append('    ArcGIS version 10.3 found (%s). Using Custom Geotransformation (%s)' %(ArcVersion, geoTransfmName))
+    elif ArcVersionF <= 10.3 or ArcVersionF == 10.6:
+        loglines.append('    ArcGIS version %s found. Using Custom Geotransformation (%s)' %(ArcVersion, geoTransfmName))
         arcpy.AddMessage(loglines[-1])
         arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, ElevResampleMethod, cellsize2, geoTransfmName)
 
@@ -1069,6 +1102,7 @@ def create_lat_lon_rasters(arcpy, projdir, mosprj, wkt_text):
     arcpy.Delete_management(xout)
     arcpy.Delete_management(yout)
     arcpy.Delete_management(projraster)
+    arcpy.Delete_management(OutRas)
 
     loglines.append('        Latitude and Longitude NetCDF Files created.')
     arcpy.AddMessage(loglines[-1])
@@ -1122,7 +1156,7 @@ def build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, Arc_To_From, Arc
     if pointCF:
         sr = arcpy.SpatialReference(pointSR)                                    # Build a spatial reference object
         PE_string = sr.exportToString().replace("'", '"')                       # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
-        grid_mapping = CF_projdict[0]
+        grid_mapping = crsVar
         rootgrp = add_CRS_var(rootgrp, sr, 0, grid_mapping, 'latitude_longitude', PE_string)
 
     # Set variable descriptions
@@ -1300,7 +1334,7 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, loglin
     arcpy.env.outputCoordinateSystem = sr2
 
     # Output files
-    outStreams = os.path.join(projdir, 'Streams.shp')
+    outStreams = os.path.join(projdir, StreamSHP)
     RoutingNC = os.path.join(projdir, RT_nc)
     OutFC = os.path.join("in_memory", "Nodes")
     OutFC2 = os.path.join("in_memory", "NodeElev")
@@ -1539,12 +1573,12 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     if pointCF:
         sr = arcpy.SpatialReference(pointSR)                                    # Build a spatial reference object
         PE_string = sr.exportToString().replace("'", '"')                       # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
-        grid_mapping = CF_projdict[0]
+        grid_mapping = crsVar
         rootgrp = add_CRS_var(rootgrp, sr, 0, grid_mapping, 'latitude_longitude', PE_string)
 
     # Set variable descriptions
     ids.long_name = 'Lake ID'
-    LkAreas.long_name = 'Gridded lake area (sq. km)'
+    LkAreas.long_name = 'Lake area (sq. km)'
     LkMxEs.long_name = 'Maximum lake elevation (m ASL)'
     WeirCs.long_name = 'Weir coefficient'
     WeirLs.long_name = 'Weir length (m)'
@@ -1619,140 +1653,24 @@ def build_LAKEPARM_ascii(LakeTBL, min_elevs, areas, max_elevs, OrificEs, cen_lat
             a.writerow([lkid, lkarea, lkmaxelev, WeirC, WeirL, OrificeC, OrificA, OrificeE, cen_lat, cen_lon, ifd_Val, WeirH])   #COMID?
     return
 
+def high_res_lakeparams():
+    '''
+    8/12/2017: This function is designed to generate lake parameters [...] based
+    on the high-resolution grid provided. This is accomplished by reprojecting
+    the provided lakes to the high-resolution elevation coordinate system and then
+    providing these as zones to the Zonal Statistics tool.
+
+    NOTE: Currently, this informs some of the elevation parameters, but not all,
+    as the lake outlet cannot be determined without calculating flow direction and
+    flow accumulation on the high-resolution grid, which could represent a computational
+    problem.
+    '''
+    tic1 = time.time()
+
+    # Run zonal stats on the input grid?
+    return
+
 def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, loglines, lakeIDfield=None):
-    """This function is intended to add reservoirs into the model grid stack, such
-    that the channelgrid and lake grids are modified to accomodate reservoirs and
-    lakes."""
-
-    # Get information about the input domain and set environments
-    arcpy.env.cellSize = cellsize
-    arcpy.env.extent =  channelgrid
-    arcpy.env.outputCoordinateSystem = sr2
-    arcpy.env.snapRaster = channelgrid
-
-    # Use extent of channelgrid raster to add a feature layer of lake polygons
-    outshp = projdir + os.path.sep + 'in_lakes_clip.shp'
-    arcpy.CopyFeatures_management(in_lakes, outshp)
-
-    # Create new area field
-    Field1 = 'AREASQKM'
-    if Field1 not in [field.name for field in arcpy.ListFields(outshp)]:
-        arcpy.AddField_management(outshp, Field1, "FLOAT")
-        arcpy.CalculateField_management(outshp, Field1, '!shape.area@squarekilometers!', "PYTHON_9.3")
-    arcpy.MakeFeatureLayer_management(outshp, "Lakeslyr")
-
-    if lakeIDfield is None:
-        loglines.append('    Adding auto-incremented lake ID field (1...n)')
-        arcpy.AddMessage(loglines[-1])
-
-        # Renumber lakes 1-n (addfield, calculate field)
-        lakeID = "NEWID"
-        arcpy.AddField_management("Lakeslyr", lakeID, "LONG")
-        expression = 'autoIncrement()'
-        code_block = """rec = 0\ndef autoIncrement():\n    global rec\n    pStart = 1\n    pInterval = 1\n    if (rec == 0):\n        rec = pStart\n    else:\n        rec = rec + pInterval\n    return rec"""
-        arcpy.CalculateField_management("Lakeslyr", lakeID, expression, "PYTHON_9.3", code_block)
-    else:
-        loglines.append('    Using provided lake ID field: %s' %lakeIDfield)
-        arcpy.AddMessage(loglines[-1])
-        lakeID = lakeIDfield                                                    # Use existing field specified by 'lakeIDfield' parameter
-
-    # Create a raster from the lake polygons that matches the channelgrid layer
-    outRastername = os.path.join(projdir, "Lakesras")
-    outfeatures = os.path.join(projdir, 'lakes.shp')
-    arcpy.CopyFeatures_management("Lakeslyr", outfeatures)
-    arcpy.PolygonToRaster_conversion(outfeatures, lakeID, outRastername, "MAXIMUM_AREA")      # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
-    #arcpy.FeatureToRaster_conversion(outfeatures, lakeID, outRastername)        # This tool requires only ArcGIS for Desktop Basic, but does not allow a priority field
-
-    # Hack to convert Lakesras to 16bit integer
-    outRaster1 = (channelgrid * 0) + Raster(outRastername)                      # Create 16bit ratser for Lakesras out of channelgrid
-    outRaster = Con(IsNull(outRaster1)==1, NoDataVal, outRaster1)               # Convert Null or NoData to -9999
-
-    # Con statement for lakes where channelgrid = -9999
-    zonstat = ZonalStatistics(outRastername, "Value", flac, "MAXIMUM")          # Get maximum flow accumulation value for each lake
-    lakeacc = Con(outRastername, flac)                                          # Flow accumulation over lakes only
-    TestCon = Con(lakeacc == zonstat, outRastername, NoDataVal)                 # Bottom of lake channelgrid pixel = lake number
-    NewChannelgrid = Con(IsNull(TestCon)==1, channelgrid, TestCon)              # This is the new lake-routed channelgrid layer
-
-    # Now march down a set number of pixels to get minimum lake elevation
-    tolerance = int(float(arcpy.GetRasterProperties_management(channelgrid, 'CELLSIZEX').getOutput(0)) * LK_walker)
-    SnapPour = SnapPourPoint(SetNull(TestCon, TestCon, "VALUE = %s" %NoDataVal), flac, tolerance)                          # Snap lake outlet pixel to FlowAccumulation with tolerance
-    del flac
-    outTable2 = r'in_memory/zonalstat2'
-    Sample(fill2, SnapPour, outTable2, "NEAREST")
-    min_elevs = {row[1]: row[-1] for row in arcpy.da.SearchCursor(outTable2, "*")}
-
-    # Convert lakes raster to polygons and gather size & elevations
-    loglines.append('    Gathering lake parameter information.')
-    arcpy.AddMessage(loglines[-1])
-    outTable = r'in_memory/zonalstat'
-    zontable = ZonalStatisticsAsTable(outRastername, 'VALUE', fill2, outTable, "DATA", "MIN_MAX_MEAN")
-    areas = {row[0]: row[1] for row in arcpy.da.SearchCursor(outTable, ['VALUE', 'AREA'])}                      # Searchcursor on zonal stats table
-    max_elevs = {row[0]: row[1] for row in arcpy.da.SearchCursor(outTable, ['VALUE', 'MAX'])}                   # Searchcursor on zonal stats table
-
-    OrificEs = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x])/3)) for x in min_elevs.keys()}             # Orific elevation is 1/3 between the low elevation and max lake elevation
-    WeirE_vals = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x]) * 0.9)) for x in min_elevs.keys()}       # WierH is 0.9 of the distance between the low elevation and max lake elevation
-
-    #  Gather centroid lat/lons
-    out_lake_raster = os.path.join(projdir, "out_lake_raster.shp")
-    out_lake_raster_dis = os.path.join(projdir, "out_lake_raster_dissolve.shp")
-    arcpy.RasterToPolygon_conversion(outRastername, out_lake_raster, "NO_SIMPLIFY", "VALUE")
-    arcpy.Dissolve_management(out_lake_raster, out_lake_raster_dis, "GRIDCODE", "", "MULTI_PART")               # Dissolve to eliminate multipart features
-    arcpy.Delete_management(out_lake_raster)                                                                    # Added 9/4/2015
-
-    # Create a point geometry object from gathered lake centroid points
-    loglines.append('    Starting to gather lake centroid information.')
-    arcpy.AddMessage(loglines[-1])
-    sr1 = arcpy.SpatialReference()                                              # Project lake points to whatever coordinate system is specified by wkt_text in globals
-    sr1.loadFromString(wkt_text)                                                # Load the Sphere datum CRS using WKT
-    point = arcpy.Point()
-    cen_lats = {}
-    cen_lons = {}
-    shapes = {row[0]: row[1] for row in arcpy.da.SearchCursor(out_lake_raster_dis, ['GRIDCODE', 'SHAPE@XY'])}
-    arcpy.Delete_management(out_lake_raster_dis)                                                                # Added 9/4/2015
-    for shape in shapes:
-        point.X = shapes[shape][0]
-        point.Y = shapes[shape][1]
-        pointGeometry = arcpy.PointGeometry(point, sr2)
-        projpoint = pointGeometry.projectAs(sr1)                                # Optionally add transformation method:
-        cen_lats[shape] = projpoint.firstPoint.Y
-        cen_lons[shape] = projpoint.firstPoint.X
-    loglines.append('    Done gathering lake centroid information.')
-    arcpy.AddMessage(loglines[-1])
-
-    # Call function to build lake parameter netCDF file
-    if 'nc' in out_LKtype:
-        LakeNC = os.path.join(projdir, LK_nc)
-        loglines2 = build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lats, cen_lons, WeirE_vals)
-        for line in loglines2:
-            arcpy.AddMessage(line)
-        loglines += loglines2
-        del line, loglines2
-    if 'ascii' in out_LKtype:
-        LakeTBL = os.path.join(projdir, LK_tbl)
-        build_LAKEPARM_ascii(LakeTBL, min_elevs, areas, max_elevs, OrificEs, cen_lats, cen_lons, WeirE_vals)
-        loglines.append('        Done writing LAKEPARM.TBL table to disk.')
-
-    # Process: Output Channelgrid
-    channelgrid_arr = arcpy.RasterToNumPyArray(NewChannelgrid)
-    outRaster_arr = arcpy.RasterToNumPyArray(outRaster)
-
-    # Clean up by deletion
-    loglines.append('    Lake parameter table created without error.')
-    arcpy.AddMessage(loglines[-1])
-
-    # Clean up
-    del sr1, point, outRaster1
-    arcpy.Delete_management("Lakeslyr")
-    arcpy.Delete_management(outshp)
-    #arcpy.Delete_management(outfeatures)
-    arcpy.Delete_management('in_memory')
-
-    #outRaster.save(outRastername)
-    del outRaster, channelgrid                                                  # Added 9/4/2015
-    del projdir, fill2, cellsize, sr2, in_lakes
-    return arcpy, channelgrid_arr, outRaster_arr, loglines
-
-def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, loglines, lakeIDfield=None):
     """
     This function is intended to add reservoirs into the model grid stack, such
     that the channelgrid and lake grids are modified to accomodate reservoirs and
@@ -1760,8 +1678,16 @@ def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, ce
 
     This version does not attempt to subset the lakes by a size threshold, nor
     does it filter based on FTYPE.
-    3/23/2017
+
+    2/23/2018:
+        Change made to how AREA paramter is calculated in LAKEPARM. Previously, it
+        was based on the gridded lake area. Now it is based on the AREASQKM field
+        in the input shapefile. This change was made because in NWM, the lakes
+        are represented as objects, and are not resolved on a grid.
+
     """
+
+    tic1 = time.time()                                                          # Set timer
 
     # Get information about the input domain and set environments
     arcpy.env.cellSize = cellsize
@@ -1795,6 +1721,10 @@ def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, ce
         arcpy.AddMessage(loglines[-1])
         lakeID = lakeIDfield                                                    # Use existing field specified by 'lakeIDfield' parameter
 
+    # Gather areas from AREASQKM field (2/23/2018 altered in order to provide non-gridded areas)
+    areas = {row[0]: row[1]*1000000 for row in arcpy.da.SearchCursor("Lakeslyr", [lakeID, Field1])}     # Convert to square meters
+    lakeIDList = areas.keys()                                                   # 2/23/2018: Added to find which lakes go missing after resolving on the grid
+
     # Create a raster from the lake polygons that matches the channelgrid layer
     outRastername = os.path.join(projdir, "Lakesras")
     outfeatures = os.path.join(projdir, 'lakes.shp')
@@ -1806,7 +1736,7 @@ def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, ce
     outRaster1 = (channelgrid * 0) + Raster(outRastername)                      # Create 16bit ratser for Lakesras out of channelgrid
     outRaster = Con(IsNull(outRaster1)==1, NoDataVal, outRaster1)               # Convert Null or NoData to -9999
 
-    # Con statement for lakes where channelgrid = -9999
+    # Pull flow accumulation values masked to lake polygons
     zonstat = ZonalStatistics(outRastername, "Value", flac, "MAXIMUM")          # Get maximum flow accumulation value for each lake
     lakeacc = Con(outRastername, flac)                                          # Flow accumulation over lakes only
     TestCon = Con(lakeacc == zonstat, outRastername, NoDataVal)                 # Bottom of lake channelgrid pixel = lake number
@@ -1825,9 +1755,43 @@ def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, ce
     arcpy.AddMessage(loglines[-1])
     outTable = r'in_memory/zonalstat'
     zontable = ZonalStatisticsAsTable(outRastername, 'VALUE', fill2, outTable, "DATA", "MIN_MAX_MEAN")
-    areas = {row[0]: row[1] for row in arcpy.da.SearchCursor(outTable, ['VALUE', 'AREA'])}                      # Searchcursor on zonal stats table
     max_elevs = {row[0]: row[1] for row in arcpy.da.SearchCursor(outTable, ['VALUE', 'MAX'])}                   # Searchcursor on zonal stats table
 
+    # 2/23/2018: Find the missing lakes and sample elevation at their true centroid.
+    MissingLks = [item for item in lakeIDList if item not in min_elevs.keys()]  # 2/23/2018: Find lakes that were not resolved on the grid
+    shapes = {}
+    if len(MissingLks) > 0:
+        loglines.append('    Found %s lakes that could not be resolved on the grid: %s\n      Sampling elevation from the centroid of these features.' %(len(MissingLks), str(MissingLks)))
+        arcpy.AddMessage(loglines[-1])
+        arcpy.SelectLayerByAttribute_management ("Lakeslyr", "NEW_SELECTION", '"%s" IN (%s)' %(lakeID, str(MissingLks)[1:-1]))  # Select the missing lakes from the input shapefile
+        FID_to_ID = {row[0]: row[1] for row in arcpy.da.SearchCursor("Lakeslyr", ['OID@', lakeID])}
+        centroids = os.path.join('in_memory', 'lake_centroids')                     # Input lake centroid points
+        out_centroids = os.path.join('in_memory', 'lake_elevs')                     # Input lake centroid points
+        arcpy.FeatureToPoint_management("Lakeslyr", centroids, "INSIDE")            # Convert polygons to points inside each polygon
+        Sample(fill2, centroids, out_centroids, "NEAREST", 'ORIG_FID')              # Sample the elevation value for each lake centroid point. Result is a table
+        centroidElev = {FID_to_ID[row[1]]: row[-1] for row in arcpy.da.SearchCursor(out_centroids, '*')}   # Dictionary of LakeID:Centroid Elevatoin point for all forecast points
+        shapes.update({row[0]: row[1] for row in arcpy.da.SearchCursor(centroids, [lakeID, 'SHAPE@XY'])})		# Get the XY values to add to attributes later
+        max_elevs.update(centroidElev)                                              # Add single elevation value as max elevation
+        min_elevs.update(centroidElev)                                              # Make these lakes the minimum depth
+        arcpy.Delete_management(out_centroids)
+        arcpy.Delete_management(centroids)
+        del centroidElev, MissingLks
+
+    # Give a minimum active lake depth to all lakes with no elevation variation
+    elevRange = {key:max_elevs[key]-val for key,val in min_elevs.iteritems()}   # Get lake depths
+    noDepthLks = {key:val for key,val in elevRange.iteritems() if val==0}       # Make a dictionary of these lakes
+    if len(noDepthLks) > 0:
+	loglines.append('    Found %s lakes with no elevation range. Providing minimum detph of %sm for these lakes.' %(len(noDepthLks), minDepth))
+	arcpy.AddMessage(loglines[-1])
+	min_elevs.update({key:max_elevs[key]-minDepth for key,val in noDepthLks.iteritems() if val==0 }) # Give these lakes a minimum depth
+	noDepthFile = os.path.join(projdir, 'Lakes_with_minimum_depth.csv')
+	with open(noDepthFile,'wb') as f:
+		w = csv.writer(f)
+		w.writerows(noDepthLks.items())
+	del noDepthFile
+    del elevRange, noDepthLks
+
+    # Calculate the Orifice and Wier heights
     OrificEs = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x])/3)) for x in min_elevs.keys()}             # Orific elevation is 1/3 between the low elevation and max lake elevation
     WeirE_vals = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x]) * 0.9)) for x in min_elevs.keys()}       # WierH is 0.9 of the distance between the low elevation and max lake elevation
 
@@ -1846,7 +1810,7 @@ def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, ce
     point = arcpy.Point()
     cen_lats = {}
     cen_lons = {}
-    shapes = {row[0]: row[1] for row in arcpy.da.SearchCursor(out_lake_raster_dis, ['GRIDCODE', 'SHAPE@XY'])}
+    shapes.update({row[0]: row[1] for row in arcpy.da.SearchCursor(out_lake_raster_dis, ['GRIDCODE', 'SHAPE@XY'])})
     arcpy.Delete_management(out_lake_raster_dis)                                                                # Added 9/4/2015
     for shape in shapes:
         point.X = shapes[shape][0]
@@ -1859,10 +1823,8 @@ def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, ce
     arcpy.AddMessage(loglines[-1])
 
     # Create Lake parameter file
-    LakeNC = os.path.join(projdir, LK_nc)
     loglines.append('    Starting to create lake parameter table.')
     arcpy.AddMessage(loglines[-1])
-
     loglines.append('        Lakes Table: %s Lakes' %len(areas.keys()))
     arcpy.AddMessage(loglines[-1])
 
@@ -1884,7 +1846,7 @@ def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, ce
     outRaster_arr = arcpy.RasterToNumPyArray(outRaster)
 
     # Clean up by deletion
-    loglines.append('    Lake parameter table created without error.')
+    loglines.append('    Lake parameter table created without error in %3.2f seconds.' %(time.time()-tic1))
     arcpy.AddMessage(loglines[-1])
 
     # Clean up
@@ -1897,8 +1859,70 @@ def add_reservoirs_nogrid(arcpy, channelgrid, in_lakes, flac, projdir, fill2, ce
     #outRaster.save(outRastername)
     del outRaster                                                               # Added 9/4/2015
     del channelgrid                                                             # Added 9/6/2015
-    del projdir, fill2, cellsize, sr2, in_lakes
+    del projdir, fill2, cellsize, sr2, in_lakes, lakeIDList
     return arcpy, channelgrid_arr, outRaster_arr, loglines
+
+def adjust_to_landmask(arcpy, in_raster, LANDMASK, sr2, projdir, inunits):
+    """Only to be used if the domain is surrounded by water (LANDMASK=0), and there
+    is an issue with WRF Hydro due to 0 releif and 'water' and 'land' having the
+    same elevation."""
+
+    """This function is an attempt to alter the elevation data such that values
+    above 0 match exactly the land areas from the coarse grid LANDMASK. Values
+    that are defined as water in the LANDMASK layer are then set to an elevation
+    of 0. Values where LANDMASK = 1 (land) will be at least 0.5m above sea level.
+    This is done because the model cannot route water through what it thinks is
+    ocean/water based on the LANDMASK."""
+
+    # Start logging
+    loglines = ['Step 4(a) initiated...']
+    arcpy.AddMessage(loglines[-1])
+
+    mosprj2 = os.path.join(projdir, 'mosaicprj2')
+
+    # Set environments
+    arcpy.env.outputCoordinateSystem = sr2
+    descData = arcpy.Describe(in_raster)
+    extent = descData.Extent                                                    # Overkill?
+    arcpy.env.snapRaster = in_raster
+    cellsize = descData.children[0].meanCellHeight
+    loglines.append('    Cellsize: %s.' %cellsize)
+    arcpy.AddMessage(loglines[-1])
+    arcpy.env.cellSize = in_raster
+    loglines.append('    Environments set.')
+    arcpy.AddMessage(loglines[-1])
+
+    # Adjust height to raise all land areas by depending on input z units
+    if inunits == 'm':
+        above = 0.5
+    elif inunits == 'cm':                                                       # trap for fixing cm to m conversion
+        above = 50
+
+    # Create landmask on the fine grid
+    loglines.append('    Creating resampled LANDMASK layer from GEOGRID file.')
+    arcpy.AddMessage(loglines[-1])
+    LANDMASK2 = os.path.join(projdir, "LANDMASK")
+    arcpy.Resample_management(LANDMASK, LANDMASK2, cellsize, "NEAREST")
+    loglines.append('    Finished creating resampled LANDMASK layer from GEOGRID file.')
+    arcpy.AddMessage(loglines[-1])
+
+    # Conditional statement for creating elevation increase
+    LANDMASK3 = Raster(LANDMASK2)                                               # Redundant?
+    RAISEDRASTER = Con(LANDMASK3, above, "", "VALUE = 1")
+
+    # The below equation assumes that any NoData value in the input raster means ocean, and will be given a value of 0.
+    RAISEDRASTER2 = RAISEDRASTER + Con(IsNull(in_raster), 0, in_raster, "VALUE = 1")  # Add the raisedraster to the topography layer, only where the landmask isn't NoData
+    del RAISEDRASTER, LANDMASK3
+
+    # Clean up
+    RAISEDRASTER2.save(os.path.join(projdir, 'mosaicprj2'))
+    arcpy.Delete_management(LANDMASK2)
+    del RAISEDRASTER2, LANDMASK2
+
+    # Report and return objects
+    loglines.append('    Topography corrected to match coarse grid LANDMASK.')
+    arcpy.AddMessage(loglines[-1])
+    return mosprj2, loglines
 
 def build_GWBUCKPARM(arcpy, out_dir, cat_areas, cat_comids, tbl_type='.nc'):
     '''
@@ -2059,7 +2083,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, point, DX, DY, sr, i
     tic1 = time.time()
     loglines.append('Beginning to build 2D groundwater basin inputs')
     arcpy.AddMessage(loglines[-1])
-    loglines.append('    Building groundwater inputs using %s' %in_method)
+    loglines.append('  Building groundwater inputs using %s' %in_method)
     arcpy.AddMessage(loglines[-1])
 
     # Set environments
@@ -2105,14 +2129,14 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, point, DX, DY, sr, i
                 if ncvarname == 'CHANNELGRID':
                     chgrid = SetNull(nc_raster, '1', 'VALUE < 0')
                 elif ncvarname == 'FLOWDIRECTION':
-                    fdir = nc_raster
+                    fdir = Int(nc_raster)
 
             # Gather projection and set output coordinate system
             descData = arcpy.Describe(chgrid)
             sr = descData.spatialReference
             arcpy.env.outputCoordinateSystem = sr
-            arcpy.env.snapRaster = chgrid
-            arcpy.env.extent =  chgrid
+            arcpy.env.snapRaster = fdir
+            arcpy.env.extent =  fdir
 
             # Convert to stream features, then back to raster
             StreamToFeature(chgrid, fdir, outStreams, "NO_SIMPLIFY")            # Stream to feature
@@ -2149,7 +2173,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, point, DX, DY, sr, i
                     strm = SetNull(nc_raster, nc_raster, 'VALUE = %s' %NoDataVal)
                     strm.save(os.path.join('in_memory', 'strm'))
                 elif ncvarname == 'FLOWDIRECTION':
-                    fdir = nc_raster
+                    fdir = Int(nc_raster)
 
             # Gather projection and set output coordinate system
             descData = arcpy.Describe(strm)
@@ -2295,6 +2319,19 @@ def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, cellsize, ll, sr2, ma
     del arcpy, tic1, tbl_type, cellsize, out_dir, Grid   # Attempt to get the script to release the Fulldom_hires.nc file
     return loglines
 
+def reaches_with_lakes(loglines=[]):
+    '''
+    8/7/2017: This function will add lakes to an NCAR Reach-based routing configuration.
+
+    1) This function is designed to be called from within the function that is
+    generating the reach-based routing files. This is a design decision to allow
+    the lakes to be tested against known incompatiblities with the network in WRF-Hydro
+    and to be included in the reach-based routing files.
+    '''
+    tic1 = time.time()
+    #loglines.append('    Lakes added to reach-based routing files after {0: 8.2f} seconds.'.format(time.time()-tic1))
+    return loglines
+
 def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold, LU_INDEX, cellsize1, cellsize2, routing, in_lakes, lakeIDfield=None):
     """The last major function in the processing chain is to perform the spatial
     analyst functions to hydrologically process the input raster datasets."""
@@ -2375,6 +2412,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     # Create initial constant raster of -9999
     constraster = CreateConstantRaster(NoDataVal, "INTEGER")
     constraster_arr = arcpy.RasterToNumPyArray(constraster)
+    arcpy.Delete_management(constraster)
 
     # Create initial constant raster of value retdeprtfac_val
     inraster2 = CreateConstantRaster(retdeprtfac_val, "FLOAT")
@@ -2383,6 +2421,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     inraster2_var[:] = inraster2_arr
     loglines.append('    Process: RETDEPRTFAC written to output netCDF.')
     arcpy.AddMessage(loglines[-1])
+    arcpy.Delete_management(inraster2)
     del retdeprtfac_val, inraster2, inraster2_arr
 
     # Create initial constant raster of ovroughrtfac_val
@@ -2392,6 +2431,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     inraster3_var[:] = inraster3_arr
     loglines.append('    Process: OVROUGHRTFAC written to output netCDF.')
     arcpy.AddMessage(loglines[-1])
+    arcpy.Delete_management(inraster3)
     del ovroughrtfac_val, inraster3, inraster3_arr
 
     # Create initial constant raster of LKSATFAC - added 3/30/2017
@@ -2401,6 +2441,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     inraster4_var[:] = inraster4_arr
     loglines.append('    Process: LKSATFAC written to output netCDF.')
     arcpy.AddMessage(loglines[-1])
+    arcpy.Delete_management(inraster4)
     del inraster4, inraster4_arr
 
     # Process: Stream Order
@@ -2418,12 +2459,14 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
         # Make feature layer from CSV
         loglines.append('    Forecast points provided and basins being delineated.')
         arcpy.AddMessage(loglines[-1])
-        frxst_layer = 'frxst_layer'
+        frxst_layer = 'frxst_layer'                                             # XY Event Layer name
+        frsxt_FC = os.path.join('in_memory', 'frxst_FC')                        # In-memory feature class
         sr1 = arcpy.SpatialReference(4326)                                      # GCS_WGS_1984
         arcpy.MakeXYEventLayer_management(in_csv, 'LON', 'LAT', frxst_layer, sr1)
+        arcpy.CopyFeatures_management(frxst_layer, frsxt_FC)                    # To support ArcGIS 10.6, an XY event layer cannot be used in SnapRaster
         tolerance = int(float(arcpy.GetRasterProperties_management('mosaicprj', 'CELLSIZEX').getOutput(0)) * walker)
         tolerance1 = int(float(arcpy.GetRasterProperties_management('mosaicprj', 'CELLSIZEX').getOutput(0)))
-        frxst_raster = SnapPourPoint(frxst_layer, flac, tolerance1, 'FID')
+        frxst_raster = SnapPourPoint(frsxt_FC, flac, tolerance1, 'FID')
         frxst_raster2 = Con(IsNull(frxst_raster) == 0, frxst_raster, NoDataVal)
         frxst_raster2_var = rootgrp.variables['frxst_pts']
         frxst_raster2_arr = arcpy.RasterToNumPyArray(frxst_raster2)
@@ -2432,8 +2475,9 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
         arcpy.AddMessage(loglines[-1])
         del frxst_raster2_arr
 
-        SnapPour = SnapPourPoint(frxst_layer, flac, tolerance)
+        SnapPour = SnapPourPoint(frsxt_FC, flac, tolerance)
         arcpy.Delete_management(frxst_layer)
+        arcpy.Delete_management(frsxt_FC)
         arcpy.Delete_management(frxst_raster2)
         del frxst_raster2
 
@@ -2521,6 +2565,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
         loglines.append('    Process: CHANNELGRID written to output netCDF.')
         arcpy.AddMessage(loglines[-1])
 
+	arcpy.Delete_management(flac)
     del constraster, fdir, flac, strm, channelgrid, fill2, channelgrid_arr, constraster_arr
 
     # Process: Resample LU_INDEX grid to a higher resolution
@@ -2537,6 +2582,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     # Clean up
     arcpy.Delete_management('mosaicprj')
     arcpy.Delete_management(mosprj)
+    arcpy.Delete_management('in_memory')
     loglines.append('    Step 4 completed without error.')
     arcpy.AddMessage(loglines[-1])
     return rootgrp, loglines

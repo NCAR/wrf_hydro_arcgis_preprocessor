@@ -68,6 +68,7 @@ nclist = [wrf_hydro_functions.LDASFile,
 # Groundwater input options
 GW_with_Stack = True                                                            # Switch for building default groundwater inputs with any routing stack
 defaultGWmethod = 'FullDom LINKID local basins'                                 # Provide the default groundwater basin generation method. Options ['FullDom basn_msk variable', 'FullDom LINKID local basins', 'Polygon Shapefile or Feature Class']
+in_GWPolys = None                                                               # The polygon shapefile to use if defaultGWmethod == 'Polygon Shapefile or Feature Class'
 # --- End Globals --- #
 
 # --- Toolbox Classes --- #
@@ -89,6 +90,7 @@ class Toolbox(object):
                         DomainShapefile,
                         Reach_Based_Routing_Addition,
                         Lake_Parameter_Addition,
+                        AddSpatialMetadata,
                         Grid_to_FullDom_FMT,
                         GWBUCKPARM]
 
@@ -237,10 +239,9 @@ class ProcessGeogridFile(object):
         # Only activate Lake input parameter and lake ID field parameter if requesting LAKEPARM file
         if parameters[4].value == True:
             parameters[5].enabled = True
-            #parameters[6].enabled = True
         else:
             parameters[5].enabled = False
-            #parameters[6].enabled = False
+            parameters[5].value = ''
 
         ##        # Populate lake ID field combo box with list of Integer type fields from reservoirs shapefile
         ##        if parameters[5].altered:
@@ -371,8 +372,12 @@ class ProcessGeogridFile(object):
         rootgrp3.close()
         del item, globalAtts
 
-        try:
+        ### Step X(a) - Test to match LANDMASK - Only used for areas surrounded by water (LANDMASK=0)
+        ##mosprj2, loglines = wrf_hydro_functions.adjust_to_landmask(arcpy, mosprj, LANDMASK, sr2, projdir, 'm')
+        ##outtable.writelines("\n".join(loglines) + "\n")
+        ##del LANDMASK
 
+        try:
             # Step 4 - Hyrdo processing functions
             rootgrp2, loglines = wrf_hydro_functions.sa_functions(arcpy, rootgrp2, basin_mask, mosprj, ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold, LU_INDEX, cellsize1, cellsize2, routing, in_lakes)   #, lakeIDfield) # , mosprj2,
             rootgrp2.close()
@@ -387,27 +392,25 @@ class ProcessGeogridFile(object):
             rootgrp2.close()
             isError = True
 
-        try:
-            if GW_with_Stack:
-                # Build groundwater files
-                llpoint = arcpy.Point(descData.extent.XMin, descData.extent.YMin)        # Raster lower left corner
-                loglines = ['   Building Groundwater Basin inputs using default method.']
-                GWBasns, GWBasns_arr, loglines =  wrf_hydro_functions.build_GW_Basin_Raster(arcpy, out_nc2, projdir, defaultGWmethod, llpoint, DXDY_dict2['DX'], DXDY_dict2['DY'], sr2, loglines)
-                outtable.writelines("\n".join(loglines) + "\n")
-                loglines = wrf_hydro_functions.build_GW_buckets(arcpy, projdir, GWBasns, GWBasns_arr, DXDY_dict['DX'], llpoint, sr2, map_pro, GeoTransform1, tbl_type='.nc and .TBL', Grid=True)
-                outtable.writelines("\n".join(loglines) + "\n")
-                del cellsize, llpoint, GWBasns, GWBasns_arr
-            arcpy.Delete_management(hgt_m_raster)                                   # Added 4/19/2017 to allow zipws to complete
-            del descData, sr2, hgt_m_raster, map_pro, GeoTransform1, LU_INDEX
+        if not isError:
+            try:
+                if GW_with_Stack:
+                    # Build groundwater files
+                    llpoint = arcpy.Point(descData.extent.XMin, descData.extent.YMin)        # Raster lower left corner
+                    loglines = ['  Building Groundwater Basin inputs using default method.']
+                    GWBasns, GWBasns_arr, loglines =  wrf_hydro_functions.build_GW_Basin_Raster(arcpy, out_nc2, projdir, defaultGWmethod, llpoint, DXDY_dict2['DX'], DXDY_dict2['DY'], sr2, in_Polys=in_GWPolys, loglines=loglines)
+                    outtable.writelines("\n".join(loglines) + "\n")
+                    loglines = wrf_hydro_functions.build_GW_buckets(arcpy, projdir, GWBasns, GWBasns_arr, DXDY_dict['DX'], llpoint, sr2, map_pro, GeoTransform1, Grid=True) # tbl_type='.nc and .TBL'
+                    outtable.writelines("\n".join(loglines) + "\n")
+                    del cellsize, llpoint, GWBasns, GWBasns_arr
+                arcpy.Delete_management(hgt_m_raster)                                   # Added 4/19/2017 to allow zipws to complete
+                del descData, sr2, hgt_m_raster, map_pro, GeoTransform1, LU_INDEX
 
-        except Exception as e:
-            loglines.append('Exception: %s' %e)
-            arcpy.AddMessage(loglines[-1])
-            outtable.write(loglines[-1])
-            isError = True
-
-        # zip the folder
-        zipper = wrf_hydro_functions.zipUpFolder(arcpy, projdir, out_zip, nclist)
+            except Exception as e:
+                loglines.append('Exception: %s' %e)
+                arcpy.AddMessage(loglines[-1])
+                outtable.write(loglines[-1])
+                isError = True
 
         # Clean up and give finishing message
         del DXDY_dict, DXDY_dict2
@@ -417,6 +420,8 @@ class ProcessGeogridFile(object):
             shutil.rmtree(projdir)
             raise SystemExit
         else:
+            # zip the folder
+            zipper = wrf_hydro_functions.zipUpFolder(arcpy, projdir, out_zip, nclist)
             loglines = ['Completed without error in %s seconds.' %(time.time()-tic)]
             arcpy.AddMessage(loglines[-1])
             shutil.rmtree(projdir)
@@ -583,7 +588,7 @@ class ExamineOutputs(object):
         os.mkdir(out_folder)
 
         # Use wrf_hydro_functions to perform process
-        out_sfolder = wrf_hydro_functions.Examine_Outputs(arcpy, in_zip, out_folder)
+        out_sfolder = wrf_hydro_functions.Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[])
         return
 
 class ExportPRJ(object):
@@ -1063,7 +1068,15 @@ class Reach_Based_Routing_Addition(object):
 
         # Unzip to a known location (make sure no other nc files live here)
         FullDom = wrf_hydro_functions.FullDom
-        out_sfolder = wrf_hydro_functions.Examine_Outputs(arcpy, in_zip, projdir, skipfiles=[FullDom])
+        GWBasins = wrf_hydro_functions.GWGRID_nc
+        out_sfolder = wrf_hydro_functions.Examine_Outputs(arcpy, in_zip, projdir, skipfiles=[FullDom, GWBasins])
+
+        # Add a check for lakes in the routing stack. Terminate if lakes are found
+        if os.path.isfile(os.path.join(projdir, wrf_hydro_functions.LK_nc)):
+            # This means that LAKEPARM is in the input routing stack. Terminate
+            msg ='The input routing stack already has lakes in it. it is not a good idead to add reaches because network connectivity may be compromised. Exiting...'
+            messages.addErrorMessage(msg)
+            raise SystemExit
 
         # Prepare other rasters for the Routing Table function
         fdir = arcpy.Raster(os.path.join(projdir, 'flowdirection'))
@@ -1211,7 +1224,8 @@ class Lake_Parameter_Addition(object):
 
         # Unzip to a known location (make sure no other nc files live here)
         FullDom = wrf_hydro_functions.FullDom
-        out_sfolder = wrf_hydro_functions.Examine_Outputs(arcpy, in_zip, projdir, skipfiles=[FullDom])
+        GWBasins = wrf_hydro_functions.GWGRID_nc
+        out_sfolder = wrf_hydro_functions.Examine_Outputs(arcpy, in_zip, projdir, skipfiles=[FullDom, GWBasins])
 
         # Prepare other rasters for the Lake Routing function
         channelgrid = arcpy.Raster(os.path.join(projdir, 'CHANNELGRID'))
@@ -1249,6 +1263,336 @@ class Lake_Parameter_Addition(object):
             arcpy.AddMessage('Could not delete scratch folder: %s' %projdir)
             arcpy.AddMessage('You will have to delete this yourself after closing ArcGIS applications.')
         del projdir
+        return
+
+class AddSpatialMetadata(object):
+    def __init__(self):
+        """Define the tool (tool name is the name of the class)."""
+        self.label = "Apply Spatial Metadata to WRF Output"
+        self.description = "This tool takes an input Spatial Metadata File the spatial " + \
+                           " reference information and applies it to WRF-Hydro output files "
+        self.canRunInBackground = True
+        self.category = "Utilities"
+
+    def getParameterInfo(self):
+        """Define parameter definitions"""
+
+        # Input parameter
+        in_nc = arcpy.Parameter(
+            displayName="Input WRF-Hydro Output File",
+            name="in_nc",
+            datatype="File",
+            parameterType="Optional",
+            direction="Input")
+        #in_nc.filter.list = ['nc']
+
+        # Input parameter
+        in_metadata = arcpy.Parameter(
+            displayName="Input WRF-Hydro Spatial Metadata File",
+            name="in_metadata",
+            datatype="File",
+            parameterType="Optional",
+            direction="Input")
+        in_metadata.filter.list = ['nc']
+
+        # Input parameter
+        in_type = arcpy.Parameter(
+            displayName="WRF-Hydro Output Type",
+            name="in_type",
+            datatype="String",
+            parameterType="Required",
+            direction="Input")
+        in_type.filter.type = "ValueList"
+        in_type.filter.list = ["Land (coarse)", "Terrain Routing (fine grid)", "Channel Routing (points)", "Reservoir Routing (points)", "Forcing Engine"]
+
+        # Output parameter
+        out_nc = arcpy.Parameter(
+            displayName="Output spatially referenced netCDF File",
+            name="out_nc",
+            datatype="File",
+            parameterType="Required",
+            direction="Output")
+
+        parameters = [in_nc, in_metadata, in_type, out_nc]
+        return parameters
+
+    def isLicensed(self):
+        """Allow the tool to execute"""
+        return True                                                             # tool can be executed
+
+    def updateParameters(self, parameters):
+        """Modify the values and properties of parameters before internal
+        validation is performed.  This method is called whenever a parameter
+        has been changed."""
+        if parameters[0].altered:
+            parameters[3].value = parameters[0].valueAsText + '_georeferenced.nc'
+        return
+
+    def updateMessages(self, parameters):
+        """Modify the messages created by internal validation for each tool
+        parameter.  This method is called after internal validation."""
+        return
+
+    def execute(self, parameters, messages):
+        """The source code of the tool."""
+
+        # Set environments
+        tic1 = time.time()
+        arcpy.env.overwriteOutput = True
+
+        # Gather all necessary parameters
+        in_nc = parameters[0].valueAsText
+        in_metadata = parameters[1].valueAsText
+        in_type = parameters[2].valueAsText
+        out_nc = parameters[3].valueAsText
+        projdir = os.path.dirname(out_nc)
+
+        # Print informational messages
+        arcpy.AddMessage('Input WRF-Hydro Output file: %s' %in_nc)
+        arcpy.AddMessage('Input Spatial Metadata file: %s' %in_metadata)
+        arcpy.AddMessage('WRF-Hydro output type: %s' %in_type)
+        arcpy.AddMessage('Output netCDF File: %s' %out_nc)
+
+        # Prepare output log file
+        outtable = open(os.path.join(projdir, os.path.basename(out_nc) + '.log'), "w")
+        loglines = ['Begining processing on %s' %time.ctime()]
+        loglines.append('64-bit: %s' %bit64)
+        loglines.append('Input parameters:')
+        for param in parameters:
+            loglines.append('    Parameter: %s: %s' %(param.displayName, param.valueAsText))
+
+        # Hard-coded locals
+        outNCType = 'NETCDF4_CLASSIC'                                           # Data model for output netCDF data
+        fillValue = float(-1.0e+33)                                             # Fill value for missing values (not currently honored)
+        compress = True                                                         # Use compression on variables?
+        compressLevel = 2                                                       # Compression level (1=min compression, 9=max compression)
+        mapDims = {}
+        fillValue = True                                                           # Fill value for missing values
+        excludeVars = []                                                            # Variables to exclude when adding attributes from adVarAtts list
+        addVarAtts = {}                                                             # These variable attributes will be added to each data variable in output
+        excludeVarAtts = []                                                          # List of variable attributes to remove
+        addGlobalAtts = ['Conventions']                                             # Global attributes to move into the new files
+        test_results = False                                                        # Assume an inconsistency
+        geogrid = False                                                             # Assume input is not a GEOGRID file
+        gis_file = False                                                            # Assume input was not from WRF-Hydro GIS Pre-processor
+
+        # Open Dataset objects on input spatial metadata file and WRF output file
+        rootgrp = netCDF4.Dataset(in_metadata, 'r')                             # Open spatial metadata file for reading
+        rootgrp1 = netCDF4.Dataset(in_nc, 'r')                                  # Open the WRF-Hydro output file for reading
+
+        # Start comparing dimension sizes
+        if in_type in ["Land (coarse)", "Forcing Engine"]:
+
+            # Perform checks between WRF output file and metadata file
+            if in_type == "Forcing Engine":
+                wrf_dims = ['ncl1', 'ncl0']                                     # Just check the first two. Others should be identical in size
+            elif in_type == "Land (coarse)":
+                wrf_dims = ['west_east', 'south_north']
+
+            metadata_dims = ['x', 'y']
+            metadata_xdim = len(rootgrp.dimensions[metadata_dims[0]])
+            metadata_ydim = len(rootgrp.dimensions[metadata_dims[1]])
+            wrf_xdim = len(rootgrp1.dimensions[wrf_dims[0]])
+            wrf_ydim = len(rootgrp1.dimensions[wrf_dims[1]])
+            if sum([metadata_xdim==wrf_xdim, metadata_ydim==wrf_ydim]) == 2:
+                test_results = True
+
+            # Check to see if this is a GEOGRID file
+            if 'TITLE' in rootgrp.__dict__:
+                titleStr = rootgrp.__dict__['TITLE']
+                if re.match(re.compile('OUTPUT FROM GEOGRID*'), titleStr):
+                    print 'Input spatial metadata file found to be GEOGRID file for LDASOUT files.'
+                    geogrid = True
+
+            # Check to see if this was created by the WRF-Hydro GIS pre-processor
+            if 'Source_Software' in rootgrp.__dict__:
+                titleStr = rootgrp.__dict__['Source_Software']
+                if re.match(re.compile('WRF-Hydro GIS*'), titleStr):
+                    print 'Input spatial metadata file found to be WRF-Hydro GIS Pre-processor file.'
+                    gis_file = True
+
+            if in_type == "Land (coarse)":
+                mapDims = {'west_east': u'x', 'south_north': u'y'}                      # Dictionary to map old dimensions to new dimensions
+                addVars = [u'x', u'y']                                                  # These variables will be added to the output from the spatial metadata file
+                excludeVars = [u'time']                                                 # Variables to exclude when adding attributes from adVarAtts list
+                fillValue = -1.0e+33                                                    # Fill value for missing values
+
+            elif in_type == "Forcing Engine":
+                # Raw forcing files use several dimensions
+                mapDims = {'ncl0': u'y', 'ncl1': u'x', 'ncl2': u'y', 'ncl3': u'x',
+                           'ncl4': u'y', 'ncl5': u'x', 'ncl6': u'y', 'ncl7': u'x',
+                           'ncl8': u'y', 'ncl9': u'x', 'ncl10': u'y', 'ncl11': u'x',
+                           'ncl12': u'y', 'ncl13': u'x', 'ncl14': u'y', 'ncl15': u'x',
+                           'ncl16': u'y', 'ncl17': u'x', 'ncl18': u'y', 'ncl19': u'x'}  # Dictionary to map old dimensions to new dimensions
+                addVars = [u'x', u'y']                                                  # These variables will be added to the output from the spatial metadata file
+                fillValue = 9.96921E36
+
+        elif in_type == "Terrain Routing (fine grid)":
+            metadata_dims = ['x', 'y']
+            wrf_dims = ['x', 'y']
+            metadata_xdim = len(rootgrp.dimensions[metadata_dims[0]])
+            metadata_ydim = len(rootgrp.dimensions[metadata_dims[1]])
+            wrf_xdim = len(rootgrp1.dimensions[wrf_dims[0]])
+            wrf_ydim = len(rootgrp1.dimensions[wrf_dims[1]])
+            if sum([metadata_xdim==wrf_xdim, metadata_ydim==wrf_ydim]) == 2:
+                test_results = True
+
+            if 'Source_Software' in rootgrp.__dict__:
+                titleStr = rootgrp.__dict__['Source_Software']
+                if re.match(re.compile('WRF-Hydro GIS*'), titleStr):
+                    print 'Input spatial metadata file found to be WRF-Hydro GIS Pre-processor file.'
+                    gis_file = True
+
+            # No need to map or add dimensions to this type of file
+            excludeVarAtts = [u'coordinates']                                       # Remove this variable attribute as it will be unnecessary
+            addVars = [u'x', u'y']                                                  # These variables will be added to the output from the spatial metadata file
+            excludeVars = [u'time']                                                 # Variables to exclude when adding attributes from adVarAtts list
+            fillValue = -8.9999998e+15
+
+        elif in_type in ["Channel Routing (points)", "Reservoir Routing (points)"]:
+            metadata_dims = ['station']                                             # For non LAKEPARM.nc spatial metadata files
+            wrf_dims = ['station']
+
+            if 'Source_Software' in rootgrp.__dict__:
+                titleStr = rootgrp.__dict__['Source_Software']
+                if re.match(re.compile('WRF-Hydro GIS*'), titleStr):
+                    print 'Input spatial metadata file found to be WRF-Hydro GIS Pre-processor file.'
+                    gis_file = True
+                    if in_type == "Channel Routing (points)":
+                        metadata_dims = ['linkDim']                                 # For RouteLink.nc spatial metadata files
+                    elif in_type == "Reservoir Routing (points)":
+                        metadata_dims = ['nlakes']                                  # For LAKEPARM.nc spatial metadata files
+
+            metadata_dim = len(rootgrp.dimensions[metadata_dims[0]])
+            wrf_dim = len(rootgrp1.dimensions[wrf_dims[0]])
+            if metadata_dim==wrf_dim:
+                test_results = True
+
+            if in_type == "Channel Routing (points)":
+                # No need to map or add dimensions to this type of file
+                addVars = [u'latitude', u'longitude']                                   # These variables will be added to the output from the spatial metadata file
+                addVarAtts = {u'coordinates': 'latitude longitude'}                     # These variable attributes will be added to each data variable in output
+                excludeVars = [u'time', u'station_id']                                  # Variables to exclude when adding attributes from adVarAtts list
+                addGlobalAtts += [u'esri_pe_string', u'proj4', u'featureType']          # Global attributes to move into the new files
+
+            elif in_type == "Reservoir Routing (points)":
+                # No need to map or add dimensions to this type of file
+                addVars = [u'latitude', u'longitude']                                   # These variables will be added to the output from the spatial metadata file
+                addVarAtts = {u'coordinates': 'latitude longitude'}                     # These variable attributes will be added to each data variable in output
+                excludeVars = [u'time', 'lake_id']                                      # Variables to exclude when adding attributes from adVarAtts list
+                addGlobalAtts += [u'esri_pe_string', u'proj4', u'featureType']          # Global attributes to move into the new files
+
+        else:
+            test_results = False
+            print 'Could not recognize the WRF-Hydro output type given (%s)' %in_type
+            print 'Output type provided (%s) does not match spatial metadata file provided.' %(in_type)
+            print 'One of the checks between the files resulted in a mismatch. Exiting.'
+            rootgrp.close()
+            rootgrp1.close()
+            raise SystemExit
+
+        # If all tests are passed
+        if test_results == True:
+            print 'Spatial metadata file dimensions match WRF-Hydro (%s) output dimensions.' %in_type
+
+            # WARNING - NetCDF3 is very slow! This script converts all outputs to NETCDF4
+            rootgrp2 = netCDF4.Dataset(out_nc, 'w', format=outNCType)              # Open a write object on the output file. , format=rootgrp1.data_model
+            rootgrp2.set_fill_on
+
+            # Determine which variable contains the coordinate system/coordinate transform variable(s)
+            if in_type in ["Land (coarse)", "Terrain Routing (fine grid)", "Forcing Engine"]:
+                crs_var = [varname for varname,ncvar in rootgrp.variables.iteritems() if u'grid_mapping_name' in ncvar.ncattrs()][0]
+                addVarAtts[u'grid_mapping'] = crs_var
+                addVarAtts[u'esri_pe_string'] = rootgrp.variables[crs_var].getncattr(u'esri_pe_string')
+                sr = arcpy.SpatialReference()
+                sr.loadFromString(addVarAtts[u'esri_pe_string'])
+                #addVarAtts[u'proj4'] = sr.ExportToProj4()
+                addVars.append(crs_var)                                                     # Add to the list of variables to append from spatial metadata file
+
+            # Gather global attributes from spatial metadata file
+            geoatts = {att:val for att,val in rootgrp.__dict__.iteritems() if att in addGlobalAtts}
+
+            # Copy dimensions from WRF-Hydro output file, omitting variables that will be changed
+            for dimname, dim in rootgrp1.dimensions.iteritems():
+                if dimname in mapDims:
+                    # Check to see if dimensions already exist in output file
+                    if mapDims[dimname] in rootgrp2.dimensions.keys():
+                        continue
+                    else:
+                        rootgrp2.createDimension(mapDims[dimname], len(dim))        # Create dimensions with new names
+                        continue
+                rootgrp2.createDimension(dimname, len(dim))                         # Copy other dimensions from the WRF-Hydro output file
+
+            # Find the coordinate system/transform variable or any additional variables from the spatial metadata file and copy
+            for varname in addVars:
+                ncvar = rootgrp.variables[varname]
+                #if varname not in rootgrp2.variables.keys():
+                var = rootgrp2.createVariable(varname, ncvar.dtype, ncvar.dimensions)
+                var.setncatts(ncvar.__dict__)                                       # Copy the variable attributes
+
+            # Copy variables from WRF-Hydro output file, adding variable attributes as necessary
+            for varname, ncvar in rootgrp1.variables.iteritems():
+
+                if varname in rootgrp2.variables.keys():
+                    continue
+
+                # Replace old variable dimension names with the new dimension names as necessary
+                varDims = tuple(mapDims.get(varDim) if varDim in mapDims else varDim for varDim in ncvar.dimensions)
+                varAtts = {key:val for key,val in ncvar.__dict__.iteritems() if key not in excludeVarAtts}    # Only keep necessary variable attributes
+
+                # Create the variable
+                if ncvar.dtype == 'int32':
+                    var = rootgrp2.createVariable(varname, ncvar.dtype, varDims, zlib=compress, complevel=compressLevel)
+                else:
+                    # If _FillValue already exists, keep it, otherwise fill in with 'fillValue' variable
+                    if '_FillValue' in ncvar.__dict__:
+                        var = rootgrp2.createVariable(varname, ncvar.dtype, varDims, zlib=compress, complevel=compressLevel)    # Took out fillValue for testing 9/20/2016 KMS
+                    else:
+                        arcpy.AddMessage('Varname: %s' %varname)
+                        var = rootgrp2.createVariable(varname, ncvar.dtype, varDims, zlib=compress, complevel=compressLevel, fill_value=fillValue)
+
+                var.setncatts(varAtts)
+                if varname not in excludeVars:
+                    rootgrp2.variables[varname].setncatts(addVarAtts)           # Copy additional variable attributes from spatial metadata file
+                elif varname == u'time':
+                    rootgrp2.variables[varname]# Set standard_name for time
+
+            # Copy global attributes from both spatial metdata file and original WRF-Hydro output file
+            ncatts = rootgrp1.__dict__
+            geoatts2 = geoatts
+            geoatts2.update(ncatts)
+            rootgrp2.setncatts(geoatts2)
+
+            # Add variable values last (makes the script run faster)
+            for varname, ncvar in rootgrp1.variables.iteritems():
+                var = rootgrp2.variables[varname]
+                var[:] = ncvar[:]                                               # Copy the variable data into the newly created variable
+            for varname in addVars:
+                ncvar = rootgrp.variables[varname]
+                var = rootgrp2.variables[varname]
+
+                # For some reason the grid is upside-down because of the way the y values are sorted
+                if gis_file and varname == 'y':
+                    var[:] = ncvar[::-1]                                        # Reverse order of y variable to flip up-down
+                else:
+                    var[:] = ncvar[:]                                           # Copy the variable data into the newly created variable
+
+            # Close files
+            rootgrp.close()
+            rootgrp1.close()
+            rootgrp2.close()
+
+        # Record GEOGRID MAP_PROJ attribute
+        loglines.append('    Map Projection of Spatial Metadata File: %s' %sr.name)
+        arcpy.AddMessage(loglines[-1])
+        loglines.append('    Esri PE String: %s' %sr.exportToString())
+        arcpy.AddMessage(loglines[-1])
+        loglines += ['Completed without error in %s seconds.' %(time.time()-tic1)]
+
+        # Clean up and give finishing message
+        arcpy.AddMessage(loglines[-1])
+        outtable.writelines("\n".join(loglines) + "\n")
+        outtable.close()
         return
 
 class Grid_to_FullDom_FMT(object):
@@ -1379,7 +1723,8 @@ class Grid_to_FullDom_FMT(object):
         arcpy.AddMessage('Dimensions created.')
 
         # Copy variables from WRF-Hydro output file, adding variable attributes as necessary
-        addVars = [u'x', u'y', Variable]
+        crsVar = wrf_hydro_functions.crsVar                                     # This will mirror whatever the other script is using
+        addVars = [u'x', u'y', crsVar, Variable]
         for varname in addVars:
             ncvar2 = rootgrp1.variables[varname]
             if varname == 'TOPOGRAPHY':
@@ -1391,7 +1736,7 @@ class Grid_to_FullDom_FMT(object):
 
         # Hard-code some global attributes
         #rootgrp2.setncatts(rootgrp1.__dict__)                                   # Copy global attributes from input file
-        rootgrp2.Conventions = 'CF-1.5'
+        rootgrp2.Conventions = 'CF-1.6'
         rootgrp2.GDAL_DataType = 'Generic'
         rootgrp2.Source_Software = 'WRF-Hydro GIS Pre-processor'
         rootgrp2.history = 'Created %s' %time.ctime()
@@ -1480,7 +1825,7 @@ class GWBUCKPARM(object):
             name="out_dir",
             datatype="DEFolder",
             parameterType="Required",
-            direction="Output")
+            direction="Input")
 
         parameters = [in_nc, in_geo, in_method, in_Polys, tbl_type, out_dir]
         return parameters
