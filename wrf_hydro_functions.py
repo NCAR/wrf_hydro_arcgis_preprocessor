@@ -8,7 +8,7 @@
 # *=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*
 
 # Written by Kevin Sampson, NCAR
-# Modified 2018/01/24
+# Modified 2018/12/07
 
 # --- Import Modules --- #
 import sys
@@ -1956,13 +1956,16 @@ def build_GWBUCKPARM(arcpy, out_dir, cat_areas, cat_comids, tbl_type='.nc'):
         Basins.long_name = 'Basin monotonic ID (1...n)'
         coeffs.long_name = 'Coefficient'
         Expons.long_name = 'Exponent'
-        Zmaxs.long_name = 'Zmax'
-        Zinits.long_name = 'Zinit'
+        Zmaxs.long_name = 'Bucket height'
+        Zinits.long_name = 'Initial height of water in bucket'
         Area_sqkms.long_name = 'Basin area in square kilometers'
         if Community:
             ComIDs.long_name = 'Catchment Gridcode'
         else:
             ComIDs.long_name = 'NHDCatchment FEATUREID (NHDFlowline ComID)'     # For NWM
+        Zmaxs.units = 'mm'
+        Zinits.units = 'mm'
+        Area_sqkms.units = 'km2'
 
         # Fill in global attributes
         rootgrp.featureType = 'point'                                           # For compliance
