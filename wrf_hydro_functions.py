@@ -1034,7 +1034,7 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     # Extract By Mask
     arcpy.env.cellSize = cellsize2
     mosprj2 = ExtractByMask(mosprj, Con(IsNull('hgt_m_Layer')==1,0,0))          # New method 10/29/2018: Use Con to eliminate NoData cells if there are any.
-    arcpy.Delete_management(mosprj)
+    #arcpy.Delete_management(mosprj)
     mosprj2.save(mosprj)                                                        # Save this new extracted raster to the same name as before
 
     # Check that the number of rows and columns are correct
