@@ -1,3 +1,5 @@
+#  WRF-Hydro <img src="https://ral.ucar.edu/sites/default/files/public/wrf_hydro_symbol_logo_2017_09_150pxby63px.png" width=100 align="left" />
+
 # wrf_hydro_arcgis_preprocessor
 ARC-GIS TOOLS FOR PREPARING WRF-HYDRO ROUTING GRIDS
 
