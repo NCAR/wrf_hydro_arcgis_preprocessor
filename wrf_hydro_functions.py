@@ -57,7 +57,7 @@ GW_nc = 'GWBUCKPARM.nc'                                                         
 GWGRID_nc = 'GWBASINS.nc'
 GW_ASCII = 'gw_basns_geogrid.txt'                                               # Default Groundwater Basins ASCII grid output
 GW_TBL = 'GWBUCKPARM.TBL'
-StreamSHP = 'Streams.shp'                                                       # Default streams shapefile name
+StreamSHP = 'streams.shp'                                                       # Default streams shapefile name
 
 # Options
 maskRL = False                                                                  # Allow masking of channels in RouteLink file. May cause WRF-Hydro to crash if True
