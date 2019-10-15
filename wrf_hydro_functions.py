@@ -1793,7 +1793,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
 
     # Give a minimum active lake depth to all lakes with no elevation variation
     elevRange = {key:max_elevs[key]-val for key,val in min_elevs.items()}   # Get lake depths
-    noDepthLks = {key:val for key,val in elevRange.items() if val==0}       # Make a dictionary of these lakes
+    noDepthLks = {key:val for key,val in elevRange.items() if val<minDepth}       # Make a dictionary of these lakes
     if len(noDepthLks) > 0:
         loglines.append('    Found %s lakes with no elevation range. Providing minimum depth of %sm for these lakes.' %(len(noDepthLks), minDepth))
         arcpy.AddMessage(loglines[-1])
