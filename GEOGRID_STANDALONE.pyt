@@ -1431,7 +1431,7 @@ class GWBUCKPARM(object):
         sr.loadFromString(PE_string.replace('"', "'"))
         llpoint = arcpy.Point(float(GT[0]), float(GT[3]) - float(DY*len(rootgrp1.dimensions['y'])))    # Calculate LLCorner value from GeoTransform (ULCorner)
         rootgrp1.close()
-        GWBasns, GWBasns_arr, loglines =  wrf_hydro_functions.build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, llpoint, DX, DY, sr, in_Polys, loglines=loglines)
+        GWBasns, GWBasns_arr, loglines = wrf_hydro_functions.build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, llpoint, DX, DY, sr, in_Polys, loglines=loglines)
         del rootgrp1, sr, GT, PE_string
 
         # Resample to coarse grid
