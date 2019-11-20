@@ -57,7 +57,7 @@ GW_nc = 'GWBUCKPARM.nc'                                                         
 GWGRID_nc = 'GWBASINS.nc'
 GW_ASCII = 'gw_basns_geogrid.txt'                                               # Default Groundwater Basins ASCII grid output
 GW_TBL = 'GWBUCKPARM.TBL'
-StreamSHP = 'Streams.shp'                                                       # Default streams shapefile name
+StreamSHP = 'streams.shp'                                                       # Default streams shapefile name
 
 # Options
 maskRL = False                                                                  # Allow masking of channels in RouteLink file. May cause WRF-Hydro to crash if True
@@ -1034,7 +1034,7 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     # Extract By Mask
     arcpy.env.cellSize = cellsize2
     mosprj2 = ExtractByMask(mosprj, Con(IsNull('hgt_m_Layer')==1,0,0))          # New method 10/29/2018: Use Con to eliminate NoData cells if there are any.
-    arcpy.Delete_management(mosprj)
+    #arcpy.Delete_management(mosprj)
     mosprj2.save(mosprj)                                                        # Save this new extracted raster to the same name as before
 
     # Check that the number of rows and columns are correct
@@ -1793,7 +1793,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
 
     # Give a minimum active lake depth to all lakes with no elevation variation
     elevRange = {key:max_elevs[key]-val for key,val in min_elevs.items()}   # Get lake depths
-    noDepthLks = {key:val for key,val in elevRange.items() if val==0}       # Make a dictionary of these lakes
+    noDepthLks = {key:val for key,val in elevRange.items() if val<minDepth}       # Make a dictionary of these lakes
     if len(noDepthLks) > 0:
         loglines.append('    Found %s lakes with no elevation range. Providing minimum depth of %sm for these lakes.' %(len(noDepthLks), minDepth))
         arcpy.AddMessage(loglines[-1])
@@ -2575,6 +2575,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
 
     else:
         # Alter Channelgrid for reservoirs
+        fill2.save(os.path.join(projdir, 'fill2.tif'))                              # Added 6/4/2019 to keep ArcGIS 10.6.1 from crashing later on in the lake script
         arcpy, channelgrid_arr, outRaster_arr, loglines = add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize2, sr2, loglines, lakeIDfield)
 
         # Process: Output LAKEGRID
