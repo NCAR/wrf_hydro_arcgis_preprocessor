@@ -751,7 +751,7 @@ def recalculate_corners():
     This function is designed to recalculate the 'corner_lats' and 'corner_lons'
     global attributes of a WPS-generated GEOGRID file. This may be necessary when
     a domain consists of a subsetted GEOGRID file, which is often the case with
-    cutouts from the National Water Model.
+    cutouts (spatial subsets) from the National Water Model or other WRF-Hydro domains.
 
     For more description on the corner_lats and corner_lons attributes, see WPS documentation:
         http://www2.mmm.ucar.edu/wrf/users/docs/user_guide_V3/users_guide_chap3.htm
