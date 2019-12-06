@@ -18,6 +18,8 @@ import arcpy
 import netCDF4                                                                  # Packaged with ArcGIS 10.3 and higher
 import re                                                                       # Added 10/11/2016 for string matching in netCDF global attributes
 import importlib
+import copy                                                                     # Added 11/19/2019 to allow copying of class objects
+
 # Test current version of Python's ability to reload a module
 # https://stackoverflow.com/questions/961162/reloading-module-giving-nameerror-name-reload-is-not-defined
 try:
@@ -80,6 +82,10 @@ nclist = [wrf_hydro_functions.LDASFile,
 GW_with_Stack = True                                                            # Switch for building default groundwater inputs with any routing stack
 defaultGWmethod = 'FullDom LINKID local basins'                                 # Provide the default groundwater basin generation method. Options ['FullDom basn_msk variable', 'FullDom LINKID local basins', 'Polygon Shapefile or Feature Class']
 in_GWPolys = None                                                               # The polygon shapefile to use if defaultGWmethod == 'Polygon Shapefile or Feature Class'
+
+# Methods test switches
+coordMethod1 = True                                                             # Interpolate GEOGRID latitude and longitude coordinate arrays
+coordMethod2 = False                                                            # Transform coordinate pairs at each grid cell from projected to geocentric
 # --- End Globals --- #
 
 # --- Toolbox Classes --- #
@@ -162,15 +168,6 @@ class ProcessGeogridFile(object):
             datatype="DEFeatureClass",
             parameterType="Optional",
             direction="Input")
-
-        # Removed 5/11/2017 to simplify creation of lake features (using 1...n ID scheme)
-        ##        in_LakeIDField = arcpy.Parameter(
-        ##            displayName="ID field (Integer) for identifying lakes",
-        ##            name="in_IDfield",
-        ##            datatype="GPString",
-        ##            parameterType="Optional",
-        ##            direction="Input")
-        ##        in_LakeIDField.filter.type = "ValueList"
 
         in_raster = arcpy.Parameter(
             displayName="Input Elevation Raster",
@@ -298,10 +295,11 @@ class ProcessGeogridFile(object):
             wrf_hydro_functions.printMessages(arcpy, ['    Parameter: {0}: {1}'.format(param.displayName, param.valueAsText)])
 
         # Interpret the input for reservoir routing
-        if Lake_routing is False:
-            in_lakes = None
-        else:
+        if Lake_routing:
             in_lakes = in_reservoir
+        else:
+            in_lakes = None
+        wrf_hydro_functions.printMessages(arcpy, ['{0}'.format(in_lakes)])
 
         # Create scratch directory for temporary outputs
         projdir = os.path.join(os.path.dirname(out_zip), 'scratchdir')
@@ -334,57 +332,102 @@ class ProcessGeogridFile(object):
             varList2D.append(['LINKID', 'i4', ''])
 
         # Step 1 - Georeference geogrid file
-        LU_INDEX, sr2, Projection_String, map_pro, GeoTransform1, proj4 = wrf_hydro_functions.georeference_geogrid_file(arcpy, in_nc, 'LU_INDEX')            # Process: Generate LU Index grid
-        hgt_m_raster, sr2, Projection_String, map_pro, GeoTransform1, proj4 = wrf_hydro_functions.georeference_geogrid_file(arcpy, in_nc, 'HGT_M')
+        rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
+        coarse_grid = wrf_hydro_functions.WRF_Hydro_Grid(arcpy, rootgrp)        # Instantiate a grid object
+        fine_grid = copy.copy(coarse_grid)                                      # Copy the grid object for modification
+        fine_grid.regrid(cellsize)                                              # Regrid to the coarse grid
+        GeoTransform1 = coarse_grid.GeoTransformStr()
+        wrf_hydro_functions.printMessages(arcpy, ['    The GEOGRID File resolution is {0}sm'.format(str(coarse_grid.DX))])
+        wrf_hydro_functions.printMessages(arcpy, ['    Proj4: {0}'.format(coarse_grid.proj4)])                       # Print Proj.4 string to screen
+        wrf_hydro_functions.printMessages(arcpy, ['    GeoTransform: {0}'.format(GeoTransform1)])    # Print affine transformation to screen.
+        wrf_hydro_functions.printMessages(arcpy, ['    Created projection definition from input NetCDF GEOGRID file.'])
 
-        # Create spatial metadata file for GEOGRID/LDASOUT grids
-        descData = arcpy.Describe(hgt_m_raster)
-        DXDY_dict = {'DX': float(descData.meanCellWidth), 'DY': float(descData.meanCellHeight)}
+        # Build output raster from numpy array of the GEOGRID variable requested. This will be used as a template later on
+        LU_INDEX = coarse_grid.numpy_to_Raster(arcpy, wrf_hydro_functions.flip_grid(rootgrp.variables['LU_INDEX'][0]))
         out_nc1 = os.path.join(projdir, wrf_hydro_functions.LDASFile)
         rootgrp1 = netCDF4.Dataset(out_nc1, 'w', format=outNCType)              # wrf_hydro_functions.outNCType)
-        rootgrp1, grid_mapping = wrf_hydro_functions.create_CF_NetCDF(arcpy, hgt_m_raster, rootgrp1, sr2, map_pro, projdir, DXDY_dict,
-                GeoTransform1, addLatLon=False, notes=processing_notes_SM, proj4=proj4)
-        rootgrp1.proj4 = proj4                                                  # Add proj.4 string as a global attribute
+        rootgrp1 = wrf_hydro_functions.create_CF_NetCDF(arcpy, coarse_grid, rootgrp1,
+            projdir, addLatLon=False, notes=processing_notes_SM)
+        rootgrp1.proj4 = coarse_grid.proj4                                      # Add proj.4 string as a global attribute
         rootgrp1.close()
         del rootgrp1
 
         # Step 2 - Create high resolution topography layers
-        mosprj, cellsize1, cellsize2 = wrf_hydro_functions.create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, projdir)
+        mosprj = wrf_hydro_functions.create_high_res_topogaphy(arcpy, in_raster, LU_INDEX, cellsize, fine_grid.proj, projdir)
+
+        # Build latitude and longitude arrays for Fulldom_hires netCDF file
+        if coordMethod1:
+            wrf_hydro_functions.printMessages(arcpy, ['  Deriving geocentric coordinates on routing grid from bilinear interpolation of geogrid coordinates.'])
+            # Build latitude and longitude arrays for GEOGRID_LDASOUT spatial metadata file
+            latArr = wrf_hydro_functions.flip_grid(rootgrp.variables['XLAT_M'][:])             # Extract array of GEOGRID latitude values
+            lonArr = wrf_hydro_functions.flip_grid(rootgrp.variables['XLONG_M'][:])            # Extract array of GEOGRID longitude values
+
+            # Method 1: Use GEOGRID latitude and longitude fields and resample to routing grid
+            latRaster1 = coarse_grid.numpy_to_Raster(arcpy, latArr[0])     # Build raster out of GEOGRID latitude array - may only work in python 2
+            lonRaster1 = coarse_grid.numpy_to_Raster(arcpy, lonArr[0])     # Build raster out of GEOGRID longitude array - may only work in python2
+            ##latRaster1 = coarse_grid.numpy_to_Raster(arcpy, latArr.data[0])     # Build raster out of GEOGRID latitude array - may only work in python3
+            ##lonRaster1 = coarse_grid.numpy_to_Raster(arcpy, lonArr.data[0])     # Build raster out of GEOGRID longitude array - may only work in python3
+
+            xout = os.path.join(projdir, 'xoutput')
+            yout = os.path.join(projdir, 'youtput')
+            fine_grid.project_to_model_grid(arcpy, latRaster1, yout, resampling="BILINEAR") # Regrid from GEOGRID resolution to routing grid resolution
+            fine_grid.project_to_model_grid(arcpy, lonRaster1, xout, resampling="BILINEAR") # Regrid from GEOGRID resolution to routing grid resolution
+            latRaster2 = arcpy.Raster(yout)                                     # Regrid from GEOGRID resolution to routing grid resolution
+            lonRaster2 = arcpy.Raster(xout)                                     # Regrid from GEOGRID resolution to routing grid resolution
+            del latRaster1, lonRaster1
+
+            latArr2 = arcpy.RasterToNumPyArray(latRaster2)
+            lonArr2 = arcpy.RasterToNumPyArray(lonRaster2)
+            arcpy.Delete_management(xout)
+            arcpy.Delete_management(yout)
+            del latArr, lonArr, latRaster2, lonRaster2
+
+        elif coordMethod2:
+            wrf_hydro_functions.printMessages(arcpy, ['  Deriving geocentric coordinates on routing grid from direct transformation of geogrid coordinates.'])
+            # Method 2: Transform each point from projected coordinates to geocentric coordinates
+            wgs84_proj = arcpy.SpatialReference()                               # Project lake points to whatever coordinate system is specified by wkt_text in globals
+            wgs84_proj.loadFromString(wrf_hydro_functions.wkt_text)              # Load the Sphere datum CRS using WKT
+            xmap, ymap = fine_grid.getxy()                                      # Get x and y coordinates as numpy array
+            latArr2, lonArr2 = wrf_hydro_functions.ReprojectCoords(xmap, ymap, coarse_grid.proj, wgs84_proj)  # Transform coordinate arrays
+            del xmap, ymap, wgs84_proj
 
         # Create FULLDOM file
-        descData2 = arcpy.Describe(mosprj)
-        DXDY_dict2 = {'DX': float(descData2.meanCellWidth), 'DY': float(descData2.meanCellHeight)}
-        GT_bits = GeoTransform1.split(" ")                                       # Split up GeoTransform string for replacing DX and DY
-        GeoTransform2 = '%s %s %s %s %s %s ' %(GT_bits[0], DXDY_dict2['DX'], GT_bits[2], GT_bits[3], GT_bits[4], -DXDY_dict2['DY'])    # Alter DX/DY
         out_nc2 = os.path.join(projdir, wrf_hydro_functions.FullDom)
         rootgrp2 = netCDF4.Dataset(out_nc2, 'w', format=outNCType)              # wrf_hydro_functions.outNCType)
-        rootgrp2, grid_mapping = wrf_hydro_functions.create_CF_NetCDF(arcpy, mosprj, rootgrp2, sr2, map_pro, projdir, DXDY_dict2,
-                GeoTransform2, addLatLon=True, notes=processing_notesFD, proj4=proj4, addVars=varList2D)
-        del descData2, GeoTransform2
+        rootgrp2 = wrf_hydro_functions.create_CF_NetCDF(arcpy, fine_grid, rootgrp2, projdir,
+                addLatLon=True, notes=processing_notesFD, addVars=varList2D,
+                latArr=latArr2, lonArr=lonArr2)
 
         # Add some global attribute metadata to the Fulldom file, including relevant WPS attributes for defining the model coordinate system
         rootgrp2.geogrid_used = in_nc                                           # Paste path of geogrid file to the Fulldom global attributes
-        rootgrp2.proj4 = proj4                                                  # Add proj.4 string as a global attribute
-        rootgrp2.DX = DXDY_dict2['DX']                                          # Add X resolution as a global attribute
-        rootgrp2.DY = DXDY_dict2['DY']                                          # Add Y resolution as a global attribute
-        rootgrp3 = netCDF4.Dataset(in_nc, 'r')                                  # Open read object on input Geogrid file
-        globalAtts = rootgrp3.__dict__                                          # Read all global attributes into a dictionary
+        rootgrp2.proj4 = fine_grid.proj4                                        # Add proj.4 string as a global attribute
+        rootgrp2.DX = fine_grid.DX                                              # Add X resolution as a global attribute
+        rootgrp2.DY = fine_grid.DY                                              # Add Y resolution as a global attribute
+        globalAtts = rootgrp.__dict__                                           # Read all global attributes into a dictionary
         for item in ['MAP_PROJ', 'corner_lats', 'corner_lons', 'TRUELAT1', 'TRUELAT2', 'STAND_LON', 'POLE_LAT', 'POLE_LON', 'MOAD_CEN_LAT', 'CEN_LAT']:
             if item in globalAtts:
                 rootgrp2.setncattr(item, globalAtts[item])
-        rootgrp3.close()
+        rootgrp.close()
         del item, globalAtts
 
-        try:
+        # Process: Resample LU_INDEX grid to the routing grid resolution
+        LU_INDEX2 = os.path.join("in_memory", "LU_INDEX")
+        LU_INDEX_fine = fine_grid.project_to_model_grid(arcpy, LU_INDEX, LU_INDEX2, resampling="NEAREST") # Regrid from GEOGRID resolution to routing grid resolution
+        LU_INDEX2_arr = arcpy.RasterToNumPyArray(LU_INDEX2)
+        rootgrp2.variables['landuse'][:] = LU_INDEX2_arr
+        wrf_hydro_functions.printMessages(arcpy, ['    Process: landuse written to output netCDF.'])
+        arcpy.Delete_management(LU_INDEX)                                       # Added 4/19/2017 to allow zipws to complete
+        arcpy.Delete_management(LU_INDEX2)
+        del LU_INDEX2, LU_INDEX2_arr, LU_INDEX_fine
 
+        try:
             # Step 4 - Hyrdo processing functions
-            rootgrp2 = wrf_hydro_functions.sa_functions(arcpy, rootgrp2, basin_mask, mosprj, ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold, LU_INDEX, cellsize1, cellsize2, routing, in_lakes) # , mosprj2,
+            rootgrp2 = wrf_hydro_functions.sa_functions(arcpy, rootgrp2, basin_mask,
+                mosprj, ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold,
+                routing, in_lakes=in_lakes)
             rootgrp2.close()
             del rootgrp2
-            arcpy.Delete_management(LU_INDEX)                                   # Added 4/19/2017 to allow zipws to complete
-
         except Exception as e:
-
             wrf_hydro_functions.printMessages(arcpy, ['Exception: {0}'.format(e)])
             rootgrp2.close()
             isError = True
@@ -394,23 +437,18 @@ class ProcessGeogridFile(object):
                 if GW_with_Stack:
 
                     # Build groundwater files
-                    llpoint = arcpy.Point(descData.extent.XMin, descData.extent.YMin)        # Raster lower left corner
-                    wrf_hydro_functions.printMessages(arcpy, ['  Building Groundwater Basin inputs using default method.'])
-                    GWBasns, GWBasns_arr =  wrf_hydro_functions.build_GW_Basin_Raster(arcpy, out_nc2, projdir, defaultGWmethod, llpoint, DXDY_dict2['DX'], DXDY_dict2['DY'], sr2, in_Polys=in_GWPolys)
-                    wrf_hydro_functions.build_GW_buckets(arcpy, projdir, GWBasns, GWBasns_arr, DXDY_dict['DX'], llpoint, sr2, map_pro, GeoTransform1, Grid=True) # tbl_type='.nc and .TBL'
-                    del cellsize, llpoint, GWBasns, GWBasns_arr
-
-                arcpy.Delete_management(hgt_m_raster)                                   # Added 4/19/2017 to allow zipws to complete
-                del descData, sr2, hgt_m_raster, map_pro, GeoTransform1, LU_INDEX
-
+                    GWBasns, GWBasns_arr = wrf_hydro_functions.build_GW_Basin_Raster(arcpy,
+                        out_nc2, projdir, defaultGWmethod, fine_grid, in_Polys=in_GWPolys)
+                    wrf_hydro_functions.build_GW_buckets(arcpy, projdir, GWBasns,
+                        GWBasns_arr, coarse_grid, Grid=True)
+                    del GWBasns, GWBasns_arr  #, llpoint, extent
+                del GeoTransform1, LU_INDEX
             except Exception as e:
                 wrf_hydro_functions.printMessages(arcpy, ['Exception: {0}'.format(e)])
                 isError = True
 
         # Clean up and give finishing message
-        del DXDY_dict, DXDY_dict2
         if isError:
-
             wrf_hydro_functions.printMessages(arcpy, ['Error encountered after {0} seconds.'.format(time.time()-tic)])
             arcpy.env.workspace = projdir
             for infile in arcpy.ListDatasets():
@@ -419,7 +457,6 @@ class ProcessGeogridFile(object):
             arcpy.AddError("ERROR")
             raise SystemExit
         else:
-
             # zip the folder
             zipper = wrf_hydro_functions.zipUpFolder(arcpy, projdir, out_zip, nclist)
             wrf_hydro_functions.printMessages(arcpy, ['Completed without error in {0} seconds.'.format(time.time()-tic)])
@@ -508,13 +545,15 @@ class ExportGrid(object):
         Variable = parameters[1].valueAsText
         out_raster = parameters[2].valueAsText
 
-        # Use wrf_hydro_functions to perform process
-        nc_raster, sr2, Projection_String, map_pro, GeoTransform, proj4 = wrf_hydro_functions.georeference_geogrid_file(arcpy, in_nc, Variable)
+        # Step 1 - Georeference geogrid file
+        rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
+        coarse_grid = wrf_hydro_functions.WRF_Hydro_Grid(arcpy, rootgrp)        # Instantiate a grid object
+        nc_raster = coarse_grid.numpy_to_Raster(arcpy, wrf_hydro_functions.flip_grid(rootgrp.variables[Variable][0]))
 
         # Set environments and save
-        arcpy.env.outputCoordinateSystem = sr2
+        arcpy.env.outputCoordinateSystem = coarse_grid.proj
         nc_raster.save(out_raster)
-        arcpy.DefineProjection_management(out_raster, sr2)
+        arcpy.DefineProjection_management(out_raster, coarse_grid)
         del nc_raster
 
         arcpy.AddMessage('    Process completed without error.')
@@ -648,14 +687,15 @@ class ExportPRJ(object):
         out_prj = parameters[1].valueAsText
         Variable = 'HGT_M'
 
-        # Use wrf_hydro_functions to perform process
-        nc_raster, sr2, Projection_String, map_pro, GeoTransform, proj4 = wrf_hydro_functions.georeference_geogrid_file(arcpy, in_nc, Variable)
-        del nc_raster, sr2
+        # Step 1 - Georeference geogrid file
+        rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
+        coarse_grid = wrf_hydro_functions.WRF_Hydro_Grid(arcpy, rootgrp)        # Instantiate a grid object
 
         # Optional save .prj file
         with open(out_prj, 'w') as prj_file:
-             prj_file.write(Projection_String)
-
+             prj_file.write(coarse_grid.proj.exportToString())
+        rootgrp.close()
+        del rootgrp, coarse_grid
         arcpy.AddMessage('    Process completed without error.')
         arcpy.AddMessage('    Output Projection File: %s' %out_prj)
         return
@@ -729,7 +769,8 @@ class GenerateLatLon(object):
 
         # Create latitude and longitude rasters
         in_raster = arcpy.Raster(inraster)
-        xout2, yout2, xmap, ymap = wrf_hydro_functions.create_lat_lon_rasters(arcpy, projdir, in_raster, wrf_hydro_functions.wkt_text)
+        xout2, yout2, xmap, ymap = wrf_hydro_functions.create_lat_lon_rasters(arcpy,
+            projdir, in_raster, wrf_hydro_functions.wkt_text)
         arcpy.Delete_management(xmap)
         arcpy.Delete_management(ymap)
         del xmap, ymap
@@ -737,7 +778,6 @@ class GenerateLatLon(object):
         # Write to disk
         xout2.save(os.path.join(projdir, 'longitude'))
         yout2.save(os.path.join(projdir, 'latitude'))
-
         arcpy.AddMessage('    Process completed without error.')
         return
 
@@ -854,16 +894,16 @@ class SpatialMetadataFile(object):
         latlon_vars = parameters[4].value
         projdir = os.path.dirname(out_nc)
 
-        # Print informational messages
-        arcpy.AddMessage('Input Raster Dataset: %s' %in_nc)
-        arcpy.AddMessage('Output Grid Resolution: %s' %format_out)
-        arcpy.AddMessage('Output Regridding Factor: %s' %factor)
-        arcpy.AddMessage('Directory to be used for outputs: %s' %projdir)
-        arcpy.AddMessage('Output netCDF File: %s' %out_nc)
-
         # Prepare output log file
         outtable = os.path.join(projdir, os.path.basename(out_nc) + '.log')
         tee = wrf_hydro_functions.TeeNoFile(outtable, 'w')
+
+        # Print informational messages
+        wrf_hydro_functions.printMessages(arcpy, ['Input Raster Dataset: {0}'.format(in_nc)])
+        wrf_hydro_functions.printMessages(arcpy, ['Output Grid Resolution: {0}'.format(format_out)])
+        wrf_hydro_functions.printMessages(arcpy, ['Output Regridding Factor: {0}'.format(factor)])
+        wrf_hydro_functions.printMessages(arcpy, ['Directory to be used for outputs: {0}'.format(projdir)])
+        wrf_hydro_functions.printMessages(arcpy, ['Output netCDF File: {0}'.format(out_nc)])
         wrf_hydro_functions.printMessages(arcpy, ['Begining processing on {0}'.format(time.ctime())])
         wrf_hydro_functions.printMessages(arcpy, ['64-bit: {0}'.format(bit64)])
         wrf_hydro_functions.printMessages(arcpy, ['Input parameters:'])
@@ -871,14 +911,8 @@ class SpatialMetadataFile(object):
             wrf_hydro_functions.printMessages(arcpy, ['    Parameter: {0}: {1}'.format(param.displayName, param.valueAsText)])
 
         # Georeference geogrid file
-        in_raster, sr, Projection_String, map_pro, GeoTransformStr, proj4 = wrf_hydro_functions.georeference_geogrid_file(arcpy, in_nc, 'HGT_M')
-        descData = arcpy.Describe(in_raster)
-        DXDY_dict = {'DX': descData.meanCellWidth/factor, 'DY': descData.meanCellHeight/factor}
-        GTlist = GeoTransformStr.split(' ')                                     # Obtain GeoTransform parameters
-        GTlist[1] = str(DXDY_dict['DX'])
-        GTlist[5] = str(-DXDY_dict['DY'])
-        GeoTransformStr = ' '.join(GTlist)                                      # Re-assemble GeoTransform String with new resolution
-        wrf_hydro_functions.printMessages(arcpy, ['    New Resolution: {0} {1}'.format(DXDY_dict['DX'], DXDY_dict['DY'])])
+        rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
+        coarse_grid = wrf_hydro_functions.WRF_Hydro_Grid(arcpy, rootgrp)        # Instantiate a grid object
 
         # Record GEOGRID MAP_PROJ attribute
         wrf_hydro_functions.printMessages(arcpy, ['    Map Projection of GEOGRID: {0}'.format(wrf_hydro_functions.projdict[map_pro])])
@@ -886,17 +920,17 @@ class SpatialMetadataFile(object):
 
         # Create high resolution raster for RTOUT output using Spatial Analyst CreateConstantRaster function
         if format_out == "RTOUT":
-            arcpy.env.snapRaster = in_raster
-            arcpy.env.outputCoordinateSystem = sr
-            in_raster = CreateConstantRaster(1, "INTEGER", DXDY_dict['DX'], descData.Extent)   # Requires Spatial Analyst
+            grid_obj = copy.copy(coarse_grid)                                      # Copy the grid object for modification
+            grid_obj.regrid(factor)                                                # Regrid to the coarse grid
+            wrf_hydro_functions.printMessages(arcpy, ['    New Resolution: {0} {1}'.format(grid_obj.DX, grid_obj.DY)])
+        else:
+            grid_obj = coarse_grid
 
         # Create the netCDF file with spatial metadata
         rootgrp = netCDF4.Dataset(out_nc, 'w', format=outNCType)
-        rootgrp, grid_mapping = wrf_hydro_functions.create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir,
-                DXDY_dict, GeoTransformStr, latlon_vars, notes=processing_notes_SM, proj4=proj4)
-
+        rootgrp = wrf_hydro_functions.create_CF_NetCDF(arcpy, grid_obj, rootgrp, projdir,
+                addLatLon=latlon_vars, notes=processing_notes_SM)
         rootgrp.close()
-        del in_raster
         wrf_hydro_functions.printMessages(arcpy, ['Completed without error in {0} seconds.'.format(time.time()-tic1)])
         tee.close()
         del tee
@@ -972,17 +1006,12 @@ class DomainShapefile(object):
         arcpy.env.workspace = projdir
         arcpy.env.scratchWorkspace = projdir
 
-        # Get coarse grid raster
-        hgt_m_raster, sr2, Projection_String, map_pro, GeoTransform, proj4 = wrf_hydro_functions.georeference_geogrid_file(arcpy, in_nc, 'HGT_M')
-        del Projection_String
-
-        # Use coarse grid raster to create shapefile
-        wrf_hydro_functions.domain_shapefile(arcpy, hgt_m_raster, out_shp, sr2)
-
-        # Delete intermediate files in scratch dir
-        del hgt_m_raster, sr2
-
-        return parameters
+        # Georeference geogrid file
+        rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
+        coarse_grid = wrf_hydro_functions.WRF_Hydro_Grid(arcpy, rootgrp)        # Instantiate a grid object
+        ConstRaster = coarse_grid.numpy_to_Raster(arcpy, numpy.ones((coarse_grid.nrows, coarse_grid.ncols)))
+        coarse_grid.domain_shapefile(arcpy, ConstRaster, out_shp)
+        return
 
 class Reach_Based_Routing_Addition(object):
     def __init__(self):
@@ -1081,6 +1110,7 @@ class Reach_Based_Routing_Addition(object):
 
         # Get georeference inforormation from unzipped raster layer
         sr = arcpy.Describe(fdir).spatialReference
+        WKT = sr.exportToString().replace("'", '"')
         arcpy.env.outputCoordinateSystem = sr
 
         # Change CHANNELGRID so that it has values of 1 and Null
@@ -1091,18 +1121,18 @@ class Reach_Based_Routing_Addition(object):
             frxst_raster = None                                                 # Default is no forecast points for reach-based routing file
         else:
             frxst_raster = SetNull(frxst_raster, frxst_raster, "VALUE = %s" %wrf_hydro_functions.NoDataVal)
-        linkid = wrf_hydro_functions.Routing_Table(arcpy, projdir, sr, strm, fdir, fill2, order2, gages=frxst_raster)
+        linkid = wrf_hydro_functions.Routing_Table(arcpy, projdir, sr, strm, fdir, fill2, order2, WKT=WKT, gages=frxst_raster)
         linkid_arr = arcpy.RasterToNumPyArray(linkid)
 
         # Add new LINKID grid to the FullDom file
-        rootgrp = netCDF4.Dataset(os.path.join(projdir, FullDom), 'r+')     # Read+ object on old FullDom file
+        rootgrp = netCDF4.Dataset(os.path.join(projdir, FullDom), 'r+')         # Read+ object on old FullDom file
         linkvar = rootgrp.createVariable('LINKID', 'i4', ('y','x'))
         linkvar.setncatts(rootgrp.variables['TOPOGRAPHY'].__dict__)             # Steal variable attributes from a known variable
         linkvar[:] = linkid_arr                                                 # Populate variable using array
         rootgrp.close()
 
         # Perform cleanup before zipping up output
-        del linkvar, linkid_arr, linkid, strm, fdir, fill2, order2, sr, rootgrp
+        del linkvar, linkid_arr, linkid, strm, fdir, fill2, order2, sr, rootgrp, WKT
 
         # Zip everything back up (all possible files)
         zipper = wrf_hydro_functions.zipUpFolder(arcpy, projdir, out_zip, nclist)
@@ -1153,16 +1183,6 @@ class Lake_Parameter_Addition(object):
             parameterType="Required",
             direction="Input")
 
-        # Removed 5/11/2017 to simplify creation of lake features (using 1...n ID scheme)
-        ##        # Input parameter
-        ##        in_LakeIDField = arcpy.Parameter(
-        ##            displayName="ID field (INTEGER) for identifying lakes",
-        ##            name="in_IDfield",
-        ##            datatype="GPString",
-        ##            parameterType="Optional",
-        ##            direction="Input")
-        ##        in_LakeIDField.filter.type = "ValueList"
-
         # Output parameter
         out_zip = arcpy.Parameter(
             displayName="Output ZIP File",
@@ -1188,10 +1208,6 @@ class Lake_Parameter_Addition(object):
         """Modify the values and properties of parameters before internal
         validation is performed.  This method is called whenever a parameter
         has been changed."""
-        ##        if parameters[1].altered:
-        ##            in_lakes_file = parameters[1].valueAsText
-        ##            FieldNames = [field.name for field in arcpy.ListFields(in_lakes_file, "", "Integer")]
-        ##            parameters[2].filter.list = FieldNames
         return
 
     def updateMessages(self, parameters):
@@ -1203,19 +1219,15 @@ class Lake_Parameter_Addition(object):
         """The source code of the tool."""
 
         reload(wrf_hydro_functions)                                             # Reload in case code changes have been made
-        import arcpy                                                            # Not at all sure why this must be here, but it must
+        #import arcpy                                                            # Not at all sure why this must be here, but it must
 
         # Gather all necessary parameters
         in_zip = parameters[0].valueAsText
         in_lakes = parameters[1].valueAsText
-        #lakeIDfield = parameters[2].valueAsText
         out_zip = parameters[2].valueAsText
 
         wrf_hydro_functions.printMessages(arcpy, ['Begining processing on {0}'.format(time.ctime())])
         wrf_hydro_functions.printMessages(arcpy, ['Beginning to extract WRF-Hydro routing grids...'])
-
-        ##        if lakeIDfield is None:
-        ##            wrf_hydro_functions.printMessages(arcpy, ['  No Lake ID Field provided'])
 
         # Create scratch directory for temporary outputs
         projdir = arcpy.CreateScratchName("temp", data_type="Folder", workspace=arcpy.env.scratchFolder)
@@ -1240,7 +1252,7 @@ class Lake_Parameter_Addition(object):
         cellsize = channelgrid.meanCellHeight
 
         # Run the lake addition function
-        arcpy, channelgrid_arr, lakegrid_arr = wrf_hydro_functions.add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr) # , lakeIDfield)
+        arcpy, channelgrid_arr, lakegrid_arr = wrf_hydro_functions.add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr)
         del flac, fill2, channelgrid, sr, cellsize, in_lakes, in_zip
 
         # Add new LINKID grid to the FullDom file
@@ -1379,6 +1391,9 @@ class GWBUCKPARM(object):
         tbl_type = parameters[4].valueAsText
         out_dir = parameters[5].valueAsText
 
+        outtable = os.path.join(out_dir, 'GroundwaterBasins.log')
+        tee = wrf_hydro_functions.TeeNoFile(outtable, 'w')
+
         # Print inputs to screen
         wrf_hydro_functions.printMessages(arcpy, ['Begining processing on {0}'.format(time.ctime())])
         wrf_hydro_functions.printMessages(arcpy, ['Input parameters:'])
@@ -1392,34 +1407,28 @@ class GWBUCKPARM(object):
         else:
             wrf_hydro_functions.printMessages(arcpy, ['  Creating scratch directory {0}'.format(projdir)])
             os.makedirs(projdir)
-        outtable = os.path.join(out_dir, 'GroundwaterBasins.log')
-        tee = wrf_hydro_functions.TeeNoFile(outtable, 'w')
         arcpy.env.overwriteOutput = True
         arcpy.env.workspace = projdir
         arcpy.env.scratchWorkspace = projdir
 
+        # Georeference the Fulldom file
+        rootgrp = netCDF4.Dataset(in_nc, 'r')
+        fine_grid = wrf_hydro_functions.WRF_Hydro_Grid(arcpy, rootgrp)        # Instantiate a grid object
+        rootgrp2 = netCDF4.Dataset(in_geo, 'r')
+        coarse_grid = wrf_hydro_functions.WRF_Hydro_Grid(arcpy, rootgrp2)       # Instantiate a grid object
+        rootgrp.close()
+        rootgrp2.close()
+        extent = fine_grid.grid_extent(arcpy)
+        llpoint = arcpy.Point(extent.XMin, extent.YMin)             # Raster lower left corner
+
         # Use the fine grid file to create the basin inputs
-        rootgrp1 = netCDF4.Dataset(in_nc, 'r')
-        crsVar = wrf_hydro_functions.crsVar                                     # This will mirror whatever the other script is using
-        GT = rootgrp1.variables[crsVar].GeoTransform.split(" ")
-        PE_string = rootgrp1.variables[crsVar].esri_pe_string
-        arcpy.AddMessage('  GeoTransform: %s' %GT)
-        DX = float(GT[1])
-        DY = abs(float(GT[5]))                                          # In GeoTransform, Y is usually negative
-        sr = arcpy.SpatialReference()
-        sr.loadFromString(PE_string.replace('"', "'"))
-        llpoint = arcpy.Point(float(GT[0]), float(GT[3]) - float(DY*len(rootgrp1.dimensions['y'])))    # Calculate LLCorner value from GeoTransform (ULCorner)
-        rootgrp1.close()
-        GWBasns, GWBasns_arr = wrf_hydro_functions.build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, llpoint, DX, DY, sr, in_Polys)
-        del rootgrp1, sr, GT, PE_string
+        wrf_hydro_functions.printMessages(arcpy, ['    GeoTransform: {0}'.format(fine_grid.GeoTransformStr())])    # Print affine transformation to screen.
+        GWBasns, GWBasns_arr = wrf_hydro_functions.build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, fine_grid, in_Polys=in_Polys)
 
         # Resample to coarse grid
-        hgt_m_raster, sr2, Projection_String, map_pro, GeoTransform, proj4 = wrf_hydro_functions.georeference_geogrid_file(arcpy, in_geo, 'HGT_M')
-        descData = arcpy.Describe(hgt_m_raster)
-        cellsize = float(descData.meanCellWidth)
-        wrf_hydro_functions.build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, cellsize, llpoint, sr2, map_pro, GeoTransform, tbl_type, Grid=True)
-        arcpy.Delete_management(hgt_m_raster)
-        del sr2, descData, hgt_m_raster, Projection_String, cellsize, map_pro, GeoTransform, proj4, llpoint
+        wrf_hydro_functions.build_GW_buckets(arcpy, projdir, GWBasns, GWBasns_arr, coarse_grid, Grid=True)
+
+        del fine_grid, coarse_grid, extent, llpoint, rootgrp, rootgrp2
 
         # Clean up
         for raster in arcpy.ListRasters(projdir):

@@ -67,7 +67,7 @@ TempLakeFIle = 'in_lakes_clip.shp'                                              
 
 # Options
 maskRL = False                                                                  # Allow masking of channels in RouteLink file. May cause WRF-Hydro to crash if True
-PpVersion = 'v5.1 (06/2019)'                                                      # WRF-Hydro ArcGIS Pre-processor version to add to FullDom metadata
+PpVersion = 'v5.1.1 (12/2019)'                                                  # WRF-Hydro ArcGIS Pre-processor version to add to FullDom metadata
 CFConv = 'CF-1.5'                                                               # CF-Conventions version to place in the 'Conventions' attribute of RouteLink files
 
 # Other Global Variables
@@ -199,6 +199,378 @@ class TeeNoFile(object):
         self.stdout.flush()
     def __del__(self):
         self.close()
+
+class WRF_Hydro_Grid:
+    '''
+    Class with which to create the WRF-Hydro grid representation. Provide grid
+    information to initiate the class, and use getgrid() to generate a grid mesh
+    and index information about the intersecting cells.
+
+    Note:  The i,j index begins with (1,1) in the upper-left corner.
+    '''
+    def __init__(self, arcpy, rootgrp):
+        """
+        The first step of the process chain, in which the input NetCDF file gets
+        georeferenced and projection files are created
+
+        9/27/2017: This function was altered to use netCDF4-python library instead
+        of arcpy.NetCDFFileProperties. Also changed the corner_lat and corner_lon
+        index to reflect the lower left corner point rather than lower left center as
+        the known point.
+
+        10/6/2017: Proj4 string generation was added, with definitions adapted from
+        Adapted from https://github.com/NCAR/wrf-python/blob/develop/src/wrf/projection.py
+
+        5/29/2019: Removed MakeNetCDFRasterLayer_md function call to avoid bugs in ArcGIS
+        10.7 (BUG-000122122, BUG-000122125).
+        """
+
+        tic1 = time.time()
+        corner_index = 12                                                       # 12 = Lower Left of the Unstaggered grid
+
+        # First step: Import and georeference NetCDF file
+        printMessages(arcpy, ['Step 1: NetCDF Conversion initiated...'])        # Initiate log list for this process
+
+        # Read input WPS GEOGRID file
+        # Loop through global variables in NetCDF file to gather projection information
+        dimensions = rootgrp.dimensions
+        globalAtts = rootgrp.__dict__                                           # Read all global attributes into a dictionary
+        map_pro = globalAtts['MAP_PROJ']                                        # Find out which projection this GEOGRID file is in
+        printMessages(arcpy, ['    Map Projection: %s' %projdict[map_pro]])
+
+        # Collect grid corner XY and DX DY for creating ascii raster later
+        if 'corner_lats' in globalAtts:
+            corner_lat = float(globalAtts['corner_lats'][corner_index])         # Note: The values returned are corner points of the mass grid
+        if 'corner_lons' in globalAtts:
+            corner_lon = float(globalAtts['corner_lons'][corner_index])         # Note: The values returned are corner points of the mass grid
+        if 'DX' in globalAtts:
+            self.DX = float(globalAtts['DX'])
+        if 'DY' in globalAtts:
+            self.DY = float(globalAtts['DY'])
+
+        # Collect necessary information to put together the projection file
+        if 'TRUELAT1' in globalAtts:
+            standard_parallel_1 = globalAtts['TRUELAT1']
+        if 'TRUELAT2' in globalAtts:
+            standard_parallel_2 = globalAtts['TRUELAT2']
+        if 'STAND_LON' in globalAtts:
+            central_meridian = globalAtts['STAND_LON']
+        if 'POLE_LAT' in globalAtts:
+            pole_latitude = globalAtts['POLE_LAT']
+        if 'POLE_LON' in globalAtts:
+            pole_longitude = globalAtts['POLE_LON']
+        if 'MOAD_CEN_LAT' in globalAtts:
+            printMessages(arcpy, ['    Using MOAD_CEN_LAT for latitude of origin.'])
+            latitude_of_origin = globalAtts['MOAD_CEN_LAT']         # Added 2/26/2017 by KMS
+        elif 'CEN_LAT' in globalAtts:
+            printMessages(arcpy, ['    Using CEN_LAT for latitude of origin.'])
+            latitude_of_origin = globalAtts['CEN_LAT']
+
+        # Check to see if the input netCDF is a WPS-Generated Geogrid file.
+        if 'TITLE' in globalAtts and 'GEOGRID' in globalAtts['TITLE']:
+            self.isGeogrid = True
+        else:
+            self.isGeogrid = False
+        del globalAtts
+
+        # Handle expected dimension names from either Geogrid or Fulldom
+        if 'south_north' in dimensions:
+            self.nrows = len(dimensions['south_north'])
+        elif 'y' in dimensions:
+            self.nrows = len(dimensions['y'])
+        if 'west_east' in dimensions:
+            self.ncols = len(dimensions['west_east'])
+        elif 'x' in dimensions:
+            self.ncols = len(dimensions['x'])
+        del dimensions
+
+        # Create Projection file with information from NetCDF global attributes
+        sr2 = arcpy.SpatialReference()
+        if map_pro == 1:
+            # Lambert Conformal Conic
+            if 'standard_parallel_2' in locals():
+                projname = 'Lambert_Conformal_Conic_2SP'
+                printMessages(arcpy, ['    Using Standard Parallel 2 in Lambert Conformal Conic map projection.'])
+            else:
+                # According to http://webhelp.esri.com/arcgisdesktop/9.2/index.cfm?TopicName=Lambert_Conformal_Conic
+                projname = 'Lambert_Conformal_Conic_1SP'
+                standard_parallel_2 = standard_parallel_1
+            Projection_String = ('PROJCS["Sphere_Lambert_Conformal_Conic",'
+                                 'GEOGCS["GCS_Sphere",'
+                                 'DATUM["D_Sphere",'
+                                 'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
+                                 'PRIMEM["Greenwich",0.0],'
+                                 'UNIT["Degree",0.0174532925199433]],'
+                                 'PROJECTION["' + projname + '"],'
+                                 'PARAMETER["false_easting",0.0],'
+                                 'PARAMETER["false_northing",0.0],'
+                                 'PARAMETER["central_meridian",' + str(central_meridian) + '],'
+                                 'PARAMETER["standard_parallel_1",' + str(standard_parallel_1) + '],'
+                                 'PARAMETER["standard_parallel_2",' + str(standard_parallel_2) + '],'
+                                 'PARAMETER["latitude_of_origin",' + str(latitude_of_origin) + '],'
+                                 'UNIT["Meter",1.0]]')
+            proj4 = ("+proj=lcc +units=m +a={} +b={} +lat_1={} +lat_2={} +lat_0={} +lon_0={} +x_0=0 +y_0=0 +k_0=1.0 +nadgrids=@null +wktext  +no_defs ".format(
+            			         str(sphere_radius),
+            			         str(sphere_radius),
+            			         str(standard_parallel_1),
+            			         str(standard_parallel_2),
+            			         str(latitude_of_origin),
+            			         str(central_meridian)))
+
+        elif map_pro == 2:
+            # Polar Stereographic
+
+            # Set up pole latitude
+            phi1 = float(standard_parallel_1)
+
+            ### Back out the central_scale_factor (minimum scale factor?) using formula below using Snyder 1987 p.157 (USGS Paper 1395)
+            ##phi = math.copysign(float(pole_latitude), float(latitude_of_origin))    # Get the sign right for the pole using sign of CEN_LAT (latitude_of_origin)
+            ##central_scale_factor = (1 + (math.sin(math.radians(phi1))*math.sin(math.radians(phi))) + (math.cos(math.radians(float(phi1)))*math.cos(math.radians(phi))))/2
+
+            # Method where central scale factor is k0, Derivation from C. Rollins 2011, equation 1: http://earth-info.nga.mil/GandG/coordsys/polar_stereographic/Polar_Stereo_phi1_from_k0_memo.pdf
+            # Using Rollins 2011 to perform central scale factor calculations. For a sphere, the equation collapses to be much  more compact (e=0, k90=1)
+            central_scale_factor = (1 + math.sin(math.radians(abs(phi1))))/2        # Equation for k0, assumes k90 = 1, e=0. This is a sphere, so no flattening
+
+            # Hardcode in the pole as the latitude of origin (correct assumption?) Added 4/4/2017 by KMS
+            standard_parallel_1 = pole_latitude
+
+            printMessages(arcpy, ['      Central Scale Factor: %s' %central_scale_factor])
+            Projection_String = ('PROJCS["Sphere_Stereographic",'
+                                 'GEOGCS["GCS_Sphere",'
+                                 'DATUM["D_Sphere",'
+                                 'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
+                                 'PRIMEM["Greenwich",0.0],'
+                                 'UNIT["Degree",0.0174532925199433]],'
+                                 'PROJECTION["Stereographic"],'
+                                 'PARAMETER["False_Easting",0.0],'
+                                 'PARAMETER["False_Northing",0.0],'
+                                 'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
+                                 'PARAMETER["Scale_Factor",' + str(central_scale_factor) + '],'
+                                 'PARAMETER["Latitude_Of_Origin",' + str(standard_parallel_1) + '],'
+                                 'UNIT["Meter",1.0]]')
+            proj4 = ("+proj=stere +units=meters +a={} +b={} +lat0={} +lon_0={} +lat_ts={}".format(
+    				                str(sphere_radius),
+    								str(sphere_radius),
+    								str(pole_latitude),
+    								str(central_meridian),
+    								str(standard_parallel_1)))
+
+        elif map_pro == 3:
+            # Mercator Projection
+            Projection_String = ('PROJCS["Sphere_Mercator",'
+                                 'GEOGCS["GCS_Sphere",'
+                                 'DATUM["D_Sphere",'
+                                 'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
+                                 'PRIMEM["Greenwich",0.0],'
+                                 'UNIT["Degree",0.0174532925199433]],'
+                                 'PROJECTION["Mercator"],'
+                                 'PARAMETER["False_Easting",0.0],'
+                                 'PARAMETER["False_Northing",0.0],'
+                                 'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
+                                 'PARAMETER["Standard_Parallel_1",' + str(standard_parallel_1) + '],'
+                                 'UNIT["Meter",1.0]]')
+            proj4 = ("+proj=merc +units=meters +a={} +b={} +lon_0={} +lat_ts={}".format(
+    								str(sphere_radius),
+    								str(sphere_radius),
+    								str(central_meridian),
+    								str(standard_parallel_1)))
+
+        elif map_pro == 6:
+            # Cylindrical Equidistant (or Rotated Pole)
+            if pole_latitude != float(90) or pole_longitude != float(0):
+                # if pole_latitude, pole_longitude, or stand_lon are changed from thier default values, the pole is 'rotated'.
+                printMessages(arcpy, ['    Cylindrical Equidistant projection with a rotated pole is not currently supported.'])
+                ##proj4 = ("+proj=ob_tran +o_proj=latlon +a={} +b={} +to_meter={} +o_lon_p={} +o_lat_p={} +lon_0={}".format(
+                ##                        sphere_radius,
+                ##                        sphere_radius,
+                ##                        math.radians(1),
+                ##                        180.0 - pole_longitude,
+                ##                        pole_latitude,
+                ##                        180.0 + pole_longitude))
+                sys.exit(1)
+            else:
+                # Check units (linear unit not used in this projection).  GCS?
+                Projection_String = ('PROJCS["Sphere_Equidistant_Cylindrical",'
+                                     'GEOGCS["GCS_Sphere",'
+                                     'DATUM["D_Sphere",'
+                                     'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
+                                     'PRIMEM["Greenwich",0.0],'
+                                     'UNIT["Degree",0.0174532925199433]],'
+                                     'PROJECTION["Equidistant_Cylindrical"],'
+                                     'PARAMETER["False_Easting",0.0],'
+                                     'PARAMETER["False_Northing",0.0],'
+                                     'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
+                                     'PARAMETER["Standard_Parallel_1",' + str(standard_parallel_1) + '],'
+                                     'UNIT["Meter",1.0]]')                          # 'UNIT["Degree", 1.0]]') # ?? For lat-lon grid?
+                proj4 = ("+proj=eqc +units=meters +a={} +b={} +lon_0={}".format(str(sphere_radius), str(sphere_radius), str(central_meridian)))
+
+        sr2.loadFromString(Projection_String)
+
+        ##    # Create a custom geotransformation for this conversion (WGS84 to WRF Sphere)
+        ##    geoTransfmName = 'GCS_WGS_1984_To_WRF_Sphere'
+        ##    #sr_WGS84 = arcpy.SpatialReference(4326)                                    # WGS 1984
+        ##    customGeoTransfm = "GEOGTRAN[METHOD['Geocentric_Translation'],PARAMETER['X_Axis_Translation',0.0],PARAMETER['Y_Axis_Translation',0.0],PARAMETER['Z_Axis_Translation',0.0]]"
+        ##    arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr_WGS84, sr2, customGeoTransfm)
+
+        # Create a point geometry object from gathered corner point data
+        sr1 = arcpy.SpatialReference()
+        sr1.loadFromString(wkt_text)                                                # Load the Sphere datum CRS using WKT
+        point = arcpy.Point()
+        point.X = corner_lon
+        point.Y = corner_lat
+        pointGeometry = arcpy.PointGeometry(point, sr1)
+        projpoint = pointGeometry.projectAs(sr2)                                    # Optionally add transformation method:
+
+        # Get projected X and Y of the point geometry
+        point2 = arcpy.Point(projpoint.firstPoint.X, projpoint.firstPoint.Y)    # Lower Left Corner Point
+
+        # Populate class attributes
+        self.x00 = point2.X                                                     # X value doesn't change from LLcorner to UL corner
+        self.y00 = point2.Y + float(abs(self.DY)*self.nrows)                    # Adjust Y from LL to UL
+        self.proj = sr2
+        self.WKT = sr2.exportToString().replace("'", '"')                       # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
+        self.proj4 = proj4
+        self.point = point2
+        self.map_pro = map_pro
+        printMessages(arcpy, ['    Step 1 completed without error.'])
+        del point, sr1, projpoint, pointGeometry
+
+    def regrid(self, regrid_factor):
+        '''
+        Change the grid cell spacing while keeping all other grid parameters
+        the same.
+        '''
+        self.DX = float(self.DX)/float(regrid_factor)
+        self.DY = float(self.DY)/float(regrid_factor)
+        self.nrows = int(self.nrows*regrid_factor)
+        self.ncols = int(self.ncols*regrid_factor)
+        print('  New grid spacing: dx={0}, dy={1}'.format(self.DX, self.DY))
+        print('  New dimensions: rows={0}, cols={1}'.format(self.nrows, self.ncols))
+        return self
+
+    def GeoTransform(self):
+        '''
+        Return the affine transformation for this grid. Assumes a 0 rotation grid.
+        (top left x, w-e resolution, 0=North up, top left y, 0 = North up, n-s pixel resolution (negative value))
+        '''
+        return (self.x00, self.DX, 0, self.y00, 0, -self.DY)
+
+    def GeoTransformStr(self):
+        return ' '.join([str(item) for item in self.GeoTransform()])
+
+    def getxy(self):
+        """
+        This function will use the affine transformation (GeoTransform) to produce an
+        array of X and Y 1D arrays. Note that the GDAL affine transformation provides
+        the grid cell coordinates from the upper left corner. This is typical in GIS
+        applications. However, WRF uses a south_north ordering, where the arrays are
+        written from the bottom to the top.
+
+        The input raster object will be used as a template for the output rasters.
+        """
+        print('    Starting Process: Building to XMap/YMap')
+
+        # Build i,j arrays
+        j = numpy.arange(self.nrows) + float(0.5)                               # Add 0.5 to estimate coordinate of grid cell centers
+        i = numpy.arange(self.ncols) + float(0.5)                               # Add 0.5 to estimate coordinate of grid cell centers
+
+        # col, row to x, y   From https://www.perrygeo.com/python-affine-transforms.html
+        x = (i * self.DX) + self.x00
+        y = (j * -self.DY) + self.y00
+        del i, j
+
+        # Create 2D arrays from 1D
+        xmap = numpy.repeat(x[numpy.newaxis, :], y.shape, 0)
+        ymap = numpy.repeat(y[:, numpy.newaxis], x.shape, 1)
+        del x, y
+        print('    Conversion of input raster to XMap/YMap completed without error.')
+        return xmap, ymap
+
+    def grid_extent(self, arcpy):
+        '''
+        Return the grid bounding extent [xMin, yMin, xMax, yMax]
+        '''
+        xMax = self.x00 + (float(self.ncols)*self.DX)
+        yMin = self.y00 + (float(self.nrows)*-self.DY)
+        extent_obj = arcpy.Extent(self.x00, yMin, xMax, self.y00)
+        return extent_obj
+
+    def numpy_to_Raster(self, arcpy, in_arr, value_to_nodata=NoDataVal):
+        '''This funciton takes in an input netCDF file, a variable name, the ouput
+        raster name, and the projection definition and writes the grid to the output
+        raster. This is useful, for example, if you have a FullDom netCDF file and
+        the GEOGRID that defines the domain. You can output any of the FullDom variables
+        to raster.
+        Only use 2D arrays as input.'''
+
+        # Process: Numpy Array to Raster
+        nc_raster = arcpy.NumPyArrayToRaster(in_arr, self.point, self.DX, self.DY, value_to_nodata)
+
+        # Process: Define Projection
+        arcpy.DefineProjection_management(nc_raster, self.proj)
+        return nc_raster
+
+    def domain_shapefile(self, arcpy, in_raster, outputFile):
+        """This process creates a shapefile that bounds the GEOGRID file domain. This
+        requires the Spatial Analyst extension."""
+
+        printMessages(arcpy, ['Step 2: Build constant raster and convert to polygon...'])
+
+        # Set environments
+        arcpy.env.overwriteOutput = True
+        arcpy.env.outputCoordinateSystem = self.proj
+
+        # Build constant raster
+        RasterLayer = "RasterLayer"
+        arcpy.MakeRasterLayer_management(in_raster, RasterLayer)
+        outConstRaster = Con(IsNull(RasterLayer)==1,0,0)                        # New method 10/29/2018: Use Con to eliminate NoData cells if there are any.
+
+        # Raster to Polygon conversion
+        arcpy.RasterToPolygon_conversion(outConstRaster, outputFile, "NO_SIMPLIFY")    #, "VALUE")
+
+        # Clean up
+        arcpy.Delete_management(outConstRaster)
+        printMessages(arcpy, ['    Finished building GEOGRID domain boundary shapefile: {0}.'.format(outputFile)])
+
+    def xy_to_grid_ij(self, x, y):
+        '''
+        This function converts a coordinate in (x,y) to the correct row and column
+        on a grid. Code from: https://www.perrygeo.com/python-affine-transforms.html
+
+        Grid indices are 0-based.
+        '''
+        # x,y to col,row.
+        col = int((x - self.x00) / self.DX)
+        row = abs(int((y - self.y00) / self.DY))
+        return row, col
+
+    def grid_ij_to_xy(self, col, row):
+        '''
+        This function converts a 2D grid index (i,j) the grid cell center coordinate
+        (x,y) in the grid coordinate system.
+        Code from: https://www.perrygeo.com/python-affine-transforms.html
+
+        Grid indices are 0-based.
+        '''
+        # col, row to x, y
+        x = (col * self.DX) + self.x00 + self.DX/2.0
+        y = (row * -self.DY) + self.y00 - self.DY/2.0
+        return x, y
+
+    def project_to_model_grid(self, arcpy, in_raster, out_raster, resampling=ElevResampleMethod):
+        '''
+        Project an input raster to the output cellsize and extent of the grid object.
+        '''
+
+        # Set environments
+        arcpy.ResetEnvironments()                                               # Added 2016-02-11
+        arcpy.env.outputCoordinateSystem = self.proj
+        arcpy.env.extent = self.grid_extent(arcpy)
+        arcpy.env.cellSize = self.DX
+
+        # Project the input CRS to the output CRS
+        arcpy.ProjectRaster_management(in_raster, out_raster, self.proj, resampling, self.DX, "#", "#", in_raster.spatialReference)
+
 # --- End Classes --- #
 
 # --- Functions --- #
@@ -215,54 +587,38 @@ def makeoutncfile(arcpy, raster, outname, outvar, projdir):
     printMessages(arcpy, ['         Output File: {0}'.format(outfile)])
     return
 
-def getxy(arcpy, inraster, projdir):
-    """
-    This function will use the affine transformation (GeoTransform) to produce an
-    array of X and Y 1D arrays. Note that the GDAL affine transformation provides
-    the grid cell coordinates from the upper left corner. This is typical in GIS
-    applications. However, WRF uses a south_north ordering, where the arrays are
-    written from the bottom to the top. Thus, in order to flip the y array, select
-    flipY = True (default).
+def ReprojectCoords(xcoords, ycoords, src_srs, tgt_srs):
+    '''
+    Adapted from:
+        https://gis.stackexchange.com/questions/57834/how-to-get-raster-corner-coordinates-using-python-gdal-bindings
+     Reproject a list of x,y coordinates.
+    '''
+    tic1 = time.time()
 
-    5/31/2019:
-        This function was altered to reduce dependence on the arcgisscripting module
-        single output map algebra function for $$XMAP and $$YMAP found in the getxy
-        function, which is deprecated.
-    """
-    printMessages(arcpy, ['    Starting Process: Converting raster to XMap/YMap'])
+    # Setup coordinate transform
+    transform = osr.CoordinateTransformation(src_srs, tgt_srs)
 
-    # Setup output rasters
-    xmap = os.path.join(projdir, 'xmap2')
-    ymap = os.path.join(projdir, 'ymap2')
+    ravel_x = numpy.ravel(xcoords)
+    ravel_y = numpy.ravel(ycoords)
+    trans_x = numpy.zeros(ravel_x.shape, ravel_x.dtype)
+    trans_y = numpy.zeros(ravel_y.shape, ravel_y.dtype)
 
-    # Use the raster to get the boundary and grid information
-    descData = arcpy.Describe(inraster)
-    extent = descData.Extent
-    DX = descData.meanCellWidth
-    DY = descData.meanCellHeight
+    point = arcpy.Point()
+    for num,(x,y) in enumerate(zip(ravel_x, ravel_y)):
+        point.X = x
+        point.Y = y
+        pointGeometry = arcpy.PointGeometry(point, src_srs)
+        projpoint = pointGeometry.projectAs(tgt_srs)                            # Optionally add transformation method:
+        x1 = projpoint.firstPoint.X
+        y1 = projpoint.firstPoint.Y
+        trans_x[num] = x1
+        trans_y[num] = y1
 
-    # Build i,j arrays
-    j = numpy.arange(descData.height) + float(0.5)                              # Add 0.5 to estimate coordinate of grid cell centers
-    i = numpy.arange(descData.width) + float(0.5)                               # Add 0.5 to estimate coordinate of grid cell centers
-
-    # col, row to x, y   From https://www.perrygeo.com/python-affine-transforms.html
-    x = (i * DX) + extent.XMin
-    y = (j * -DY) + extent.YMax
-
-    # Create 2D arrays from 1D
-    x2 = numpy.repeat(x[numpy.newaxis, :], y.shape, 0)
-    y2 = numpy.repeat(y[:, numpy.newaxis], x.shape, 1)
-
-    # Convert back to rasters
-    xmap_arr = arcpy.NumPyArrayToRaster(x2, extent.lowerLeft, DX, DY, NoDataVal)
-    ymap_arr = arcpy.NumPyArrayToRaster(y2, extent.lowerLeft, DX, DY, NoDataVal)
-    xmap_arr.save(xmap)
-    ymap_arr.save(ymap)
-
-    # Clean up
-    del descData, extent, xmap_arr, ymap_arr, i, j, x, y, x2, y2
-    printMessages(arcpy, ['    Conversion of input raster to XMap/YMap completed without error.'])
-    return xmap, ymap
+    # reshape transformed coordinate arrays of the same shape as input coordinate arrays
+    trans_x = trans_x.reshape(*xcoords.shape)
+    trans_y = trans_y.reshape(*ycoords.shape)
+    print('Completed transforming coordinate pairs [{0}] in {1: 3.2f} seconds.'.format(num, time.time()-tic1))
+    return trans_x, trans_y
 
 def zipws(arcpy, zipfile, path, zip, keep, nclist):
     path = os.path.normpath(path)
@@ -283,6 +639,12 @@ def zipUpFolder(arcpy, folder, outZipFile, nclist):
         zip.close()
     except RuntimeError:
         pass
+
+def flip_grid(array):
+    '''This function takes a three dimensional array and flips it up-down to
+    correct for the netCDF storage of these grids.'''
+    array = array[:, ::-1]                                                     # Flip 2+D grid up-down
+    return array
 
 def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
     """This tool takes the output zip file from the ProcessGeogrid script and creates a raster
@@ -401,222 +763,6 @@ def recalculate_corners():
     printMessages(arcpy, ['Finished recalculating corner_lats and corner_lons attributes in {0:3.2f} seconds.'.format(time.time()-tic1)])
     return
 
-def georeference_geogrid_file(arcpy, in_nc, Variable):
-    """
-    The first step of the process chain, in which the input NetCDF file gets
-    georeferenced and projection files are created
-
-    9/27/2017: This function was altered to use netCDF4-python library instead
-    of arcpy.NetCDFFileProperties. Also changed the corner_lat and corner_lon
-    index to reflect the lower left corner point rather than lower left center as
-    the known point.
-
-    10/6/2017: Proj4 string generation was added, with definitions adapted from
-    Adapted from https://github.com/NCAR/wrf-python/blob/develop/src/wrf/projection.py
-
-    5/29/2019: Removed MakeNetCDFRasterLayer_md function call to avoid bugs in ArcGIS
-    10.7 (BUG-000122122, BUG-000122125).
-    """
-
-    # First step: Import and georeference NetCDF file
-    printMessages(arcpy, ['Step 1: NetCDF Conversion initiated... ({0})'.format(Variable)])
-
-    # Read input WPS GEOGRID file
-    # Loop through global variables in NetCDF file to gather projection information
-    rootgrp = netCDF4.Dataset(in_nc, 'r')                                       # Establish an object for reading the input NetCDF file
-    globalAtts = rootgrp.__dict__                                               # Read all global attributes into a dictionary
-    map_pro = globalAtts['MAP_PROJ']                                            # Find out which projection this GEOGRID file is in
-    printMessages(arcpy, ['    Map Projection: {0}'.format(projdict[map_pro])])
-
-    # Collect grid corner XY and DX DY for creating ascii raster later
-    if 'corner_lats' in globalAtts:
-        corner_lat = float(globalAtts['corner_lats'][12])                       # Note: The values returned are corner points of the mass grid
-    if 'corner_lons' in globalAtts:
-        corner_lon = float(globalAtts['corner_lons'][12])                       # Note: The values returned are corner points of the mass grid
-    if 'DX' in globalAtts:
-        DX = float(globalAtts['DX'])
-    if 'DY' in globalAtts:
-        DY = float(globalAtts['DY'])
-
-    # Collect necessary information to put together the projection file
-    if 'TRUELAT1' in globalAtts:
-        standard_parallel_1 = globalAtts['TRUELAT1']
-    if 'TRUELAT2' in globalAtts:
-        standard_parallel_2 = globalAtts['TRUELAT2']
-    if 'STAND_LON' in globalAtts:
-        central_meridian = globalAtts['STAND_LON']
-    if 'POLE_LAT' in globalAtts:
-        pole_latitude = globalAtts['POLE_LAT']
-    if 'POLE_LON' in globalAtts:
-        pole_longitude = globalAtts['POLE_LON']
-    if 'MOAD_CEN_LAT' in globalAtts:
-        printMessages(arcpy, ['    Using MOAD_CEN_LAT for latitude of origin.'])
-        latitude_of_origin = globalAtts['MOAD_CEN_LAT']         # Added 2/26/2017 by KMS
-    elif 'CEN_LAT' in globalAtts:
-        printMessages(arcpy, ['    Using CEN_LAT for latitude of origin.'])
-        latitude_of_origin = globalAtts['CEN_LAT']
-    del globalAtts
-
-    # Replacement code simply reads the variable and flips it south-north for use laer in numpyarraytoraster
-    data = rootgrp.variables[Variable][0].copy()
-    data = data[::-1]                                  # Flip variable south-north
-    rootgrp.close()
-
-    # Create Projection file with information from NetCDF global attributes
-    sr2 = arcpy.SpatialReference()
-    if map_pro == 1:
-        # Lambert Conformal Conic
-        if 'standard_parallel_2' in locals():
-            projname = 'Lambert_Conformal_Conic_2SP'
-            printMessages(arcpy, ['    Using Standard Parallel 2 in Lambert Conformal Conic map projection.'])
-        else:
-            # According to http://webhelp.esri.com/arcgisdesktop/9.2/index.cfm?TopicName=Lambert_Conformal_Conic
-            projname = 'Lambert_Conformal_Conic_1SP'
-            standard_parallel_2 = standard_parallel_1
-        Projection_String = ('PROJCS["Sphere_Lambert_Conformal_Conic",'
-                             'GEOGCS["GCS_Sphere",'
-                             'DATUM["D_Sphere",'
-                             'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
-                             'PRIMEM["Greenwich",0.0],'
-                             'UNIT["Degree",0.0174532925199433]],'
-                             'PROJECTION["' + projname + '"],'
-                             'PARAMETER["false_easting",0.0],'
-                             'PARAMETER["false_northing",0.0],'
-                             'PARAMETER["central_meridian",' + str(central_meridian) + '],'
-                             'PARAMETER["standard_parallel_1",' + str(standard_parallel_1) + '],'
-                             'PARAMETER["standard_parallel_2",' + str(standard_parallel_2) + '],'
-                             'PARAMETER["latitude_of_origin",' + str(latitude_of_origin) + '],'
-                             'UNIT["Meter",1.0]]')
-        proj4 = ("+proj=lcc +units=m +a={} +b={} +lat_1={} +lat_2={} +lat_0={} +lon_0={} +x_0=0 +y_0=0 +k_0=1.0 +nadgrids=@null +wktext  +no_defs ".format(
-        			         str(sphere_radius),
-        			         str(sphere_radius),
-        			         str(standard_parallel_1),
-        			         str(standard_parallel_2),
-        			         str(latitude_of_origin),
-        			         str(central_meridian)))
-
-    elif map_pro == 2:
-        # Polar Stereographic
-
-        # Set up pole latitude
-        phi1 = float(standard_parallel_1)
-
-        ### Back out the central_scale_factor (minimum scale factor?) using formula below using Snyder 1987 p.157 (USGS Paper 1395)
-        ##phi = math.copysign(float(pole_latitude), float(latitude_of_origin))    # Get the sign right for the pole using sign of CEN_LAT (latitude_of_origin)
-        ##central_scale_factor = (1 + (math.sin(math.radians(phi1))*math.sin(math.radians(phi))) + (math.cos(math.radians(float(phi1)))*math.cos(math.radians(phi))))/2
-
-        # Method where central scale factor is k0, Derivation from C. Rollins 2011, equation 1: http://earth-info.nga.mil/GandG/coordsys/polar_stereographic/Polar_Stereo_phi1_from_k0_memo.pdf
-        # Using Rollins 2011 to perform central scale factor calculations. For a sphere, the equation collapses to be much  more compact (e=0, k90=1)
-        central_scale_factor = (1 + math.sin(math.radians(abs(phi1))))/2        # Equation for k0, assumes k90 = 1, e=0. This is a sphere, so no flattening
-
-        # Hardcode in the pole as the latitude of origin (correct assumption?) Added 4/4/2017 by KMS
-        standard_parallel_1 = pole_latitude
-
-        printMessages(arcpy, ['      Central Scale Factor: {0}'.format(central_scale_factor)])
-        Projection_String = ('PROJCS["Sphere_Stereographic",'
-                             'GEOGCS["GCS_Sphere",'
-                             'DATUM["D_Sphere",'
-                             'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
-                             'PRIMEM["Greenwich",0.0],'
-                             'UNIT["Degree",0.0174532925199433]],'
-                             'PROJECTION["Stereographic"],'
-                             'PARAMETER["False_Easting",0.0],'
-                             'PARAMETER["False_Northing",0.0],'
-                             'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
-                             'PARAMETER["Scale_Factor",' + str(central_scale_factor) + '],'
-                             'PARAMETER["Latitude_Of_Origin",' + str(standard_parallel_1) + '],'
-                             'UNIT["Meter",1.0]]')
-        proj4 = ("+proj=stere +units=meters +a={} +b={} +lat0={} +lon_0={} +lat_ts={}".format(
-				                str(sphere_radius),
-								str(sphere_radius),
-								str(pole_latitude),
-								str(central_meridian),
-								str(standard_parallel_1)))
-
-    elif map_pro == 3:
-        # Mercator Projection
-        Projection_String = ('PROJCS["Sphere_Mercator",'
-                             'GEOGCS["GCS_Sphere",'
-                             'DATUM["D_Sphere",'
-                             'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
-                             'PRIMEM["Greenwich",0.0],'
-                             'UNIT["Degree",0.0174532925199433]],'
-                             'PROJECTION["Mercator"],'
-                             'PARAMETER["False_Easting",0.0],'
-                             'PARAMETER["False_Northing",0.0],'
-                             'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
-                             'PARAMETER["Standard_Parallel_1",' + str(standard_parallel_1) + '],'
-                             'UNIT["Meter",1.0]]')
-        proj4 = ("+proj=merc +units=meters +a={} +b={} +lon_0={} +lat_ts={}".format(
-								str(sphere_radius),
-								str(sphere_radius),
-								str(central_meridian),
-								str(standard_parallel_1)))
-
-    elif map_pro == 6:
-        # Cylindrical Equidistant (or Rotated Pole)
-        if pole_latitude != float(90) or pole_longitude != float(0):
-            # if pole_latitude, pole_longitude, or stand_lon are changed from thier default values, the pole is 'rotated'.
-            ##proj4 = ("+proj=ob_tran +o_proj=latlon +a={} +b={} +to_meter={} +o_lon_p={} +o_lat_p={} +lon_0={}".format(
-            ##                        sphere_radius,
-            ##                        sphere_radius,
-            ##                        math.radians(1),
-            ##                        180.0 - pole_longitude,
-            ##                        pole_latitude,
-            ##                        180.0 + pole_longitude))
-            printMessages(arcpy, ['    Cylindrical Equidistant projection with a rotated pole is not currently supported.'])
-            sys.exit(1)
-        else:
-            # Check units (linear unit not used in this projection).  GCS?
-            Projection_String = ('PROJCS["Sphere_Equidistant_Cylindrical",'
-                                 'GEOGCS["GCS_Sphere",'
-                                 'DATUM["D_Sphere",'
-                                 'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
-                                 'PRIMEM["Greenwich",0.0],'
-                                 'UNIT["Degree",0.0174532925199433]],'
-                                 'PROJECTION["Equidistant_Cylindrical"],'
-                                 'PARAMETER["False_Easting",0.0],'
-                                 'PARAMETER["False_Northing",0.0],'
-                                 'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
-                                 'PARAMETER["Standard_Parallel_1",' + str(standard_parallel_1) + '],'
-                                 'UNIT["Meter",1.0]]')                          # 'UNIT["Degree", 1.0]]') # ?? For lat-lon grid?
-            proj4 = ("+proj=eqc +units=meters +a={} +b={} +lon_0={}".format(str(sphere_radius), str(sphere_radius), str(central_meridian)))
-
-    sr2.loadFromString(Projection_String)
-
-    ##    # Create a custom geotransformation for this conversion (WGS84 to WRF Sphere)
-    ##    geoTransfmName = 'GCS_WGS_1984_To_WRF_Sphere'
-    ##    #sr_WGS84 = arcpy.SpatialReference(4326)                                    # WGS 1984
-    ##    customGeoTransfm = "GEOGTRAN[METHOD['Geocentric_Translation'],PARAMETER['X_Axis_Translation',0.0],PARAMETER['Y_Axis_Translation',0.0],PARAMETER['Z_Axis_Translation',0.0]]"
-    ##    arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr_WGS84, sr2, customGeoTransfm)
-
-    # Create a point geometry object from gathered corner point data
-    sr1 = arcpy.SpatialReference()
-    sr1.loadFromString(wkt_text)                                                # Load the Sphere datum CRS using WKT
-    point = arcpy.Point()
-    point.X = corner_lon
-    point.Y = corner_lat
-    pointGeometry = arcpy.PointGeometry(point, sr1)
-    projpoint = pointGeometry.projectAs(sr2)                                    # Optionally add transformation method:
-
-    # Get projected X and Y of the point geometry and adjust so lower left center becomes lower left corner
-    point2 = arcpy.Point(projpoint.firstPoint.X, projpoint.firstPoint.Y)
-    x00 = point2.X                                                              # X value doesn't change from LLcorner to UL corner
-    y00 = point2.Y + float(DY*data.shape[0])                                    # Adjust Y from LL to UL
-
-    # Process: Numpy Array to Raster
-    nc_raster = arcpy.NumPyArrayToRaster(numpy.array(data), point2, DX, DY, NoDataVal)
-
-    # GeoTransform
-    GeoTransformStr = '%s %s %s %s %s %s ' %(x00, DX, 0, y00, 0, -DY)
-    printMessages(arcpy, ['    GeoTransform: {0}'.format(GeoTransformStr)])
-    del data
-
-    # Process: Define Projection
-    arcpy.DefineProjection_management(nc_raster, sr2)
-    printMessages(arcpy, ['    Step 1 completed without error.'])
-    return nc_raster, sr2, Projection_String, map_pro, GeoTransformStr, proj4
-
 def add_CRS_var(rootgrp, sr, map_pro, CoordSysVarName, grid_mapping, PE_string, GeoTransformStr=None):
     '''
     10/13/2017 (KMS):
@@ -712,7 +858,7 @@ def add_CRS_var(rootgrp, sr, map_pro, CoordSysVarName, grid_mapping, PE_string, 
     rootgrp.Conventions = CFConv                                                # Maybe 1.0 is enough?
     return rootgrp
 
-def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict, GeoTransformStr, addLatLon=False, notes='', proj4='', addVars=[]):
+def create_CF_NetCDF(arcpy, grid_obj, rootgrp, projdir, addLatLon=False, notes='', addVars=[], latArr=None, lonArr=None):
     """This function will create the netCDF file with CF conventions for the grid
     description. Valid output formats are 'GEOGRID', 'ROUTING_GRID', and 'POINT'.
     The output NetCDF will have the XMAP/YMAP created for the x and y variables
@@ -724,16 +870,16 @@ def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict,
     printMessages(arcpy, ['Creating CF-netCDF File.'])
 
     # Gather projection information from input raster projection
-    descData = arcpy.Describe(in_raster)
-    dim1size = descData.width
-    dim2size = descData.height
+    sr = grid_obj.proj
+    dim1size = grid_obj.ncols
+    dim2size = grid_obj.nrows
     srType = sr.type
-    PE_string = sr.exportToString().replace("'", '"')                                     # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
+    PE_string = grid_obj.WKT                           # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
     printMessages(arcpy, ['    Esri PE String: {0}'.format(PE_string)])
 
     # Find name for the grid mapping
-    if CF_projdict.get(map_pro) is not None:
-        grid_mapping = CF_projdict[map_pro]
+    if CF_projdict.get(grid_obj.map_pro) is not None:
+        grid_mapping = CF_projdict[grid_obj.map_pro]
         printMessages(arcpy, ['    Map Projection of input raster : {0}'.format(grid_mapping)])
     else:
         #grid_mapping = sr.name
@@ -783,11 +929,11 @@ def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict,
         var_x.units = proj_units                                                # was 'meter', now 'm'
         var_y._CoordinateAxisType = "GeoY"                                      # Use GeoX and GeoY for projected coordinate systems only
         var_x._CoordinateAxisType = "GeoX"                                      # Use GeoX and GeoY for projected coordinate systems only
-        var_y.resolution = float(DXDY_dict['DY'])                               # Added 11/3/2016 by request of NWC
-        var_x.resolution = float(DXDY_dict['DX'])                               # Added 11/3/2016 by request of NWC
+        var_y.resolution = float(grid_obj.DY)                                   # Added 11/3/2016 by request of NWC
+        var_x.resolution = float(grid_obj.DX)                                   # Added 11/3/2016 by request of NWC
 
         # Build coordinate reference system variable
-        rootgrp = add_CRS_var(rootgrp, sr, map_pro, CoordSysVarName, grid_mapping, PE_string, GeoTransformStr)
+        rootgrp = add_CRS_var(rootgrp, sr, grid_obj.map_pro, CoordSysVarName, grid_mapping, PE_string, grid_obj.GeoTransformStr())
 
     # For prefilling additional variables and attributes on the same 2D grid, given as a list [[<varname>, <vardtype>, <long_name>],]
     for varinfo in addVars:
@@ -797,22 +943,10 @@ def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict,
         #ncvar.long_name = varinfo[2]
         #ncvar.units = varinfo[3]
 
-    # Set environments to control output extent and cellsize, create a blank raster to use
-    arcpy.env.extent = descData.extent
-    arcpy.env.cellSize = descData.meanCellWidth
-    blank = arcpy.CreateRandomRaster_management(projdir, 'random', raster_extent=descData.extent, cellsize=descData.meanCellWidth)
-
     # Get x and y variables for the netCDF file
-    xmap, ymap = getxy(arcpy, blank, projdir)
-    arcpy.Delete_management(blank)
-    del blank, descData
-    ymaparr = arcpy.RasterToNumPyArray(ymap)
-    xmaparr = arcpy.RasterToNumPyArray(xmap)
+    xmaparr, ymaparr = grid_obj.getxy()
     var_y[:] = ymaparr[:,0]                                                     # Assumes even spacing in y across domain
     var_x[:] = xmaparr[0,:]                                                     # Assumes even spacing in x across domain
-    arcpy.Delete_management(xmap)
-    arcpy.Delete_management(ymap)
-    del xmap, ymap
     printMessages(arcpy, ['    Coordinate variables and variable attributes set after {0: 3.2f} seconds.'.format(time.time()-tic1)])
 
     if addLatLon == True:
@@ -858,66 +992,25 @@ def create_CF_NetCDF(arcpy, in_raster, rootgrp, sr, map_pro, projdir, DXDY_dict,
         ##    lat_WRF._CoordinateSystems = "%s %s" %(CoordSysVarName, LatLonCoordSysVarName)        # For specifying more than one coordinate system
         ##    lon_WRF._CoordinateSystems = "%s %s" %(CoordSysVarName, LatLonCoordSysVarName)        # For specifying more than one coordinate system
 
-        # Create latitude and longitude rasters
-        try:
-            # Try to trap any errors in this try statement
+        # Populate netCDF variables using input numpy arrays
+        lat_WRF[:] = latArr
+        lon_WRF[:] = lonArr
 
-            # Get lat and lon grids on WRF Sphere
-            xout, yout, xmap, ymap = create_lat_lon_rasters(arcpy, projdir, in_raster, wkt_text)
-            arcpy.Delete_management(xmap)
-            arcpy.Delete_management(ymap)
-            del xmap, ymap
-
-            # Populate netCDF variables using converted numpy arrays
-            youtarr = arcpy.RasterToNumPyArray(yout)
-            xoutarr = arcpy.RasterToNumPyArray(xout)
-            printMessages(arcpy, ['        youtarr.shape : {0}, {1}'.format(youtarr.shape[0], youtarr.shape[1])])
-            printMessages(arcpy, ['        xoutarr.shape : {0}, {1}'.format(xoutarr.shape[0], xoutarr.shape[1])])
-            printMessages(arcpy, ['        lat_WRF.shape : {0}, {1}'.format(lat_WRF.shape[0], lat_WRF.shape[1])])
-            printMessages(arcpy, ['        lon_WRF.shape : {0}, {1}'.format(lon_WRF.shape[0], lon_WRF.shape[1])])
-            lat_WRF[:] = youtarr
-            lon_WRF[:] = xoutarr
-            del xout, yout, youtarr, xoutarr, in_raster
-
-            printMessages(arcpy, ['    Variables populated after {0: 3.2f} seconds.'.format(time.time()-tic1)])
-            printMessages(arcpy, ['    Process completed without error.'])
-            printMessages(arcpy, ['    LATITUDE and LONGITUDE variables and variable attributes set after {0: 3.2f} seconds.'.format(time.time()-tic1)])
-
-        except Exception as e:
-            printMessages(arcpy, ['    Process did not complete. Error: {0}'.format(e)])
+        printMessages(arcpy, ['    Variables populated after {0: 3.2f} seconds.'.format(time.time()-tic1)])
+        printMessages(arcpy, ['    Process completed without error.'])
+        printMessages(arcpy, ['    LATITUDE and LONGITUDE variables and variable attributes set after {0: 3.2f} seconds.'.format(time.time()-tic1)])
+        printMessages(arcpy, ['    LATITUDE and LONGITUDE variables and variable attributes set after {0: 3.2f} seconds.'.format(time.time()-tic1)])
 
     # Global attributes
     rootgrp.GDAL_DataType = 'Generic'
     rootgrp.Source_Software = 'WRF-Hydro GIS Pre-processor %s' %PpVersion
-    rootgrp.proj4 = proj4                                                       # Added 3/16/2018 (KMS) to avoid a warning in WRF-Hydro output
-    rootgrp.history = 'Created {0}'.format(time.ctime())
+    rootgrp.proj4 = grid_obj.proj4                                              # Added 3/16/2018 (KMS) to avoid a warning in WRF-Hydro output
+    rootgrp.history = 'Created %s' %time.ctime()
     rootgrp.processing_notes = notes
     printMessages(arcpy, ['    netCDF global attributes set after {0: 3.2f} seconds.'.format(time.time()-tic1)])
 
     # Return the netCDF file to the calling script
-    return rootgrp, grid_mapping
-
-def domain_shapefile(arcpy, in_raster, out_shp, sr2):
-    """This process creates a shapefile that bounds the GEOGRID file domain. This
-    requires the Spatial Analyst extension."""
-
-    printMessages(arcpy, ['Step 2: Build constant raster and convert to polygon...'])
-
-    # Set environments
-    arcpy.env.overwriteOutput = True
-    arcpy.env.outputCoordinateSystem = sr2
-
-    # Build constant raster
-    RasterLayer = "RasterLayer"
-    arcpy.MakeRasterLayer_management(in_raster, RasterLayer)
-    outConstRaster = Con(IsNull(RasterLayer)==1,0,0)                            # New method 10/29/2018: Use Con to eliminate NoData cells if there are any.
-
-    # Raster to Polygon conversion
-    arcpy.RasterToPolygon_conversion(outConstRaster, out_shp, "NO_SIMPLIFY")    #, "VALUE")
-
-    # Clean up
-    arcpy.Delete_management(outConstRaster)
-    printMessages(arcpy, ['    Finished building GEOGRID domain boundary shapefile: {0}.'.format(out_shp)])
+    return rootgrp
 
 def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, projdir):
     """
@@ -1041,7 +1134,56 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
 
     # Finish
     printMessages(arcpy, ['    Step 2 completed without error.'])
-    return mosprj, cellsize1, cellsize2
+    return mosprj
+
+def getxy(arcpy, inraster, projdir):
+    """
+    This function will use the affine transformation (GeoTransform) to produce an
+    array of X and Y 1D arrays. Note that the GDAL affine transformation provides
+    the grid cell coordinates from the upper left corner. This is typical in GIS
+    applications. However, WRF uses a south_north ordering, where the arrays are
+    written from the bottom to the top. Thus, in order to flip the y array, select
+    flipY = True (default).
+
+    5/31/2019:
+        This function was altered to reduce dependence on the arcgisscripting module
+        single output map algebra function for $$XMAP and $$YMAP found in the getxy
+        function, which is deprecated.
+    """
+    printMessages(arcpy, ['    Starting Process: Converting raster to XMap/YMap'])
+
+    # Setup output rasters
+    xmap = os.path.join(projdir, 'xmap2')
+    ymap = os.path.join(projdir, 'ymap2')
+
+    # Use the raster to get the boundary and grid information
+    descData = arcpy.Describe(inraster)
+    extent = descData.Extent
+    DX = descData.meanCellWidth
+    DY = descData.meanCellHeight
+
+    # Build i,j arrays
+    j = numpy.arange(descData.height) + float(0.5)                              # Add 0.5 to estimate coordinate of grid cell centers
+    i = numpy.arange(descData.width) + float(0.5)                               # Add 0.5 to estimate coordinate of grid cell centers
+
+    # col, row to x, y   From https://www.perrygeo.com/python-affine-transforms.html
+    x = (i * DX) + extent.XMin
+    y = (j * -DY) + extent.YMax
+
+    # Create 2D arrays from 1D
+    x2 = numpy.repeat(x[numpy.newaxis, :], y.shape, 0)
+    y2 = numpy.repeat(y[:, numpy.newaxis], x.shape, 1)
+
+    # Convert back to rasters
+    xmap_arr = arcpy.NumPyArrayToRaster(x2, extent.lowerLeft, DX, DY, NoDataVal)
+    ymap_arr = arcpy.NumPyArrayToRaster(y2, extent.lowerLeft, DX, DY, NoDataVal)
+    xmap_arr.save(xmap)
+    ymap_arr.save(ymap)
+
+    # Clean up
+    del descData, extent, xmap_arr, ymap_arr, i, j, x, y, x2, y2
+    printMessages(arcpy, ['    Conversion of input raster to XMap/YMap completed without error.'])
+    return xmap, ymap
 
 def create_lat_lon_rasters(arcpy, projdir, mosprj, wkt_text):
     """The third function in the process is to create the latitude and longitude
@@ -1264,17 +1406,21 @@ def build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, Arc_To_From, Arc
     printMessages(arcpy, ['    Routing table created without error.'])
 
 def assign_lake_IDs(arcpy, in_lakes, lakeIDfield=None):
+    '''
+    This function will either assign a new, unique lake ID field to an existing
+    lake feature layer, or return an existing (provided) lake ID field if it
+    exists in the input feature class.
+    '''
     tic1 = time.time()
 
     if lakeIDfield is None:
-        printMessages(arcpy, ['    Adding auto-incremented lake ID field (1...n)'])
-
         # Renumber lakes 1-n (addfield, calculate field)
+        printMessages(arcpy, ['    Adding auto-incremented lake ID field (1...n)'])
         lakeID = defaultLakeID
-        arcpy.AddField_management("Lakeslyr", lakeID, "LONG")
+        arcpy.AddField_management(in_lakes, lakeID, "LONG")
         expression = 'autoIncrement()'
         code_block = """rec = 0\ndef autoIncrement():\n    global rec\n    pStart = 1\n    pInterval = 1\n    if (rec == 0):\n        rec = pStart\n    else:\n        rec = rec + pInterval\n    return rec"""
-        arcpy.CalculateField_management("Lakeslyr", lakeID, expression, "PYTHON_9.3", code_block)
+        arcpy.CalculateField_management(in_lakes, lakeID, expression, "PYTHON_9.3", code_block)
     else:
         printMessages(arcpy, ['    Using provided lake ID field: {0}'.format(lakeIDfield)])
         lakeID = lakeIDfield                                                    # Use existing field specified by 'lakeIDfield' parameter
@@ -1330,7 +1476,7 @@ def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, FLID, i
     printMessages(arcpy, ['    Lakes added to reach-based routing files after {0: 3.2f} seconds.'.format(time.time()-tic1)])
     return WaterbodyDict, Lake_Link_Type_arr
 
-def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=None, Lakes=None):
+def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, WKT='', gages=None, Lakes=None):
     """If "Create reach-based routing files?" is selected, this function will create
     the Route_Link.nc table and Streams.shp shapefiles in the output directory."""
 
@@ -1570,12 +1716,10 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
             cursor.updateRow(row)
     arcpy.DeleteField_management(outStreams, ['FROM_NODE', 'TO_NODE'])          # Delete node-based fields
 
-
     # Make call to Lake module
     if Lakes is not None:
         ToSeg = {arcid:From_To[arcid][1] for arcid in order}
         reaches_with_lakes(arcpy, outStreams, Lakes, projdir, ToSeg, order, "ARCID", channelgrid)
-
 
     # Call function to build the netCDF parameter table
     build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, Arc_To_From, Arc_From_To, NodesLL, NodesXY, Lengths, Straglers, StrOrder, sr1, gageDict=frxst_linkID)
@@ -2037,7 +2181,7 @@ def build_GWBUCKPARM(arcpy, out_dir, cat_areas, cat_comids, tbl_type='.nc'):
     del arcpy, tic1, Community, tbl_type, cat_areas, cat_comids
     return
 
-def build_GWBASINS_nc(arcpy, GW_BUCKS2, out_dir, hgt_m_raster, sr2, map_pro, GeoTransform):
+def build_GWBASINS_nc(arcpy, GW_BUCKS2, out_dir, grid_obj):
     '''
     5/17/2017: This function will build the 2-dimensional groundwater bucket
     grid in netCDF format.
@@ -2046,17 +2190,12 @@ def build_GWBASINS_nc(arcpy, GW_BUCKS2, out_dir, hgt_m_raster, sr2, map_pro, Geo
     used for building the netCDF file and the raster is used for building the ASCII raseter.
     '''
     tic1 = time.time()
-
     out_file = os.path.join(out_dir, GWGRID_nc)
     varList2D = [['BASIN', 'i4', 'Basin ID corresponding to GWBUCKPARM table values']]
 
     # Create spatial metadata file for GEOGRID/LDASOUT grids
-    descData = arcpy.Describe(hgt_m_raster)
-    DXDY_dict = {'DX': float(descData.meanCellWidth), 'DY': float(descData.meanCellHeight)}
     rootgrp = netCDF4.Dataset(out_file, 'w', format=outNCType)
-    rootgrp, grid_mapping = create_CF_NetCDF(arcpy, hgt_m_raster, rootgrp, sr2, map_pro, out_dir, DXDY_dict,
-            GeoTransform, addLatLon=False, notes='', proj4='', addVars=varList2D)
-    del descData, grid_mapping
+    rootgrp = create_CF_NetCDF(arcpy, grid_obj, rootgrp, out_dir, addLatLon=False, notes='', addVars=varList2D)
 
     # Array size check
     GWBasns_arr = arcpy.RasterToNumPyArray(GW_BUCKS2, '#', '#', '#', nodata_to_value=NoDataVal) # This is done because of an occasional dimension mismatch
@@ -2069,7 +2208,7 @@ def build_GWBASINS_nc(arcpy, GW_BUCKS2, out_dir, hgt_m_raster, sr2, map_pro, Geo
     rootgrp.close()
     printMessages(arcpy, ['    Process: {0} completed without error'.format(out_file)])
     printMessages(arcpy, ['    Finished building groundwater grid file in {0:3.2f} seconds'.format(time.time()-tic1)])
-    del arcpy, GW_BUCKS2, out_dir, hgt_m_raster, sr2, map_pro, GeoTransform, tic1, out_file, varList2D, DXDY_dict, ncvar, rootgrp, GWBasns_arr
+    del arcpy, GW_BUCKS2, out_dir, tic1, out_file, varList2D, ncvar, rootgrp, GWBasns_arr
     return
 
 def build_GWBASINS_ascii(arcpy, GW_BUCKS2, out_dir, cellsize, GW_ASCII=GW_ASCII):
@@ -2103,7 +2242,7 @@ def build_GWBASINS_ascii(arcpy, GW_BUCKS2, out_dir, cellsize, GW_ASCII=GW_ASCII)
     del arcpy, GW_BUCKS2, out_dir, tic1, out_file, GW_ASCII
     return
 
-def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, point, DX, DY, sr, in_Polys=None):
+def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=None):
     '''
     10/10/2017:
     This function was added to build the groundwater basins raster using a variety
@@ -2125,135 +2264,146 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, point, DX, DY, sr, i
     arcpy.env.overwriteOutput = True
     arcpy.env.workspace = projdir
     arcpy.env.scratchWorkspace = projdir
+    sr = grid_obj.proj
 
     # Open input FullDom file
     rootgrp1 = netCDF4.Dataset(in_nc, 'r')                                      # Read-only on FullDom file
 
-    # Determine which method will be used to generate groundwater bucket grid
-    if in_method == 'FullDom basn_msk variable':
+    try:
+        # Determine which method will be used to generate groundwater bucket grid
+        if in_method == 'FullDom basn_msk variable':
 
-        # Create a raster layer from the netCDF
-        GWBasns = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables['basn_msk'][:]), point, DX, DY)
-        arcpy.CalculateStatistics_management(GWBasns)
-        arcpy.DefineProjection_management(GWBasns, sr)
-
-        # Gather projection and set output coordinate system
-        descData = arcpy.Describe(GWBasns)
-        sr = descData.spatialReference
-        arcpy.env.outputCoordinateSystem = sr
-
-    elif in_method == 'FullDom LINKID local basins':
-
-        if 'LINKID' not in rootgrp1.variables:
-            printMessages(arcpy, ['    Generating LINKID grid from CHANNELGRID and FLOWDIRECTION'])
-
-            # In-memory files
-            outStreams_ = 'in_memory\Streams'
-            outRaster = "in_memory\LINKID"
-
-            # Read Fulldom file variable to raster layer
-            for ncvarname in ['CHANNELGRID', 'FLOWDIRECTION']:
-                printMessages(arcpy, ['    Creating layer from netCDF variable {0}'.format(ncvarname)])
-                nc_raster = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables[ncvarname][:]), point, DX, DY)
-                arcpy.DefineProjection_management(nc_raster, sr)
-                nc_raster.save(os.path.join('in_memory', ncvarname))
-                arcpy.CalculateStatistics_management(nc_raster)
-                arcpy.env.snapRaster = nc_raster
-                if ncvarname == 'CHANNELGRID':
-                    chgrid = SetNull(nc_raster, '1', 'VALUE < 0')
-                elif ncvarname == 'FLOWDIRECTION':
-                    fdir = Int(nc_raster)
+            # Create a raster layer from the netCDF
+            #GWBasns = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables['basn_msk'][:]), point, grid_obj.DX, grid_obj.DY)
+            GWBasns = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables['basn_msk'][:]))
+            arcpy.CalculateStatistics_management(GWBasns)
+            #arcpy.DefineProjection_management(GWBasns, sr)
 
             # Gather projection and set output coordinate system
-            descData = arcpy.Describe(chgrid)
-            sr = descData.spatialReference
+            descData = arcpy.Describe(GWBasns)
+            #sr = descData.spatialReference
             arcpy.env.outputCoordinateSystem = sr
-            arcpy.env.snapRaster = fdir
-            arcpy.env.extent =  fdir
 
-            # Convert to stream features, then back to raster
-            StreamToFeature(chgrid, fdir, outStreams_, "NO_SIMPLIFY")            # Stream to feature
-            if ArcVersionF >= 10.5:
-                arcidField = 'arcid'
+        elif in_method == 'FullDom LINKID local basins':
+
+            if 'LINKID' not in rootgrp1.variables:
+                printMessages(arcpy, ['    Generating LINKID grid from CHANNELGRID and FLOWDIRECTION'])
+
+                # In-memory files
+                outStreams_ = 'in_memory\Streams'
+                outRaster = "in_memory\LINKID"
+
+                # Read Fulldom file variable to raster layer
+                for ncvarname in ['CHANNELGRID', 'FLOWDIRECTION']:
+                    printMessages(arcpy, ['    Creating layer from netCDF variable {0}'.format(ncvarname)])
+                   # nc_raster = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables[ncvarname][:]), point, grid_obj.DX, grid_obj.DY)
+                    nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables[ncvarname][:]))
+                    #arcpy.DefineProjection_management(nc_raster, sr)
+                    nc_raster.save(os.path.join('in_memory', ncvarname))
+                    arcpy.CalculateStatistics_management(nc_raster)
+                    arcpy.env.snapRaster = nc_raster
+                    if ncvarname == 'CHANNELGRID':
+                        chgrid = SetNull(nc_raster, '1', 'VALUE < 0')
+                    elif ncvarname == 'FLOWDIRECTION':
+                        fdir = Int(nc_raster)
+
+                # Gather projection and set output coordinate system
+                descData = arcpy.Describe(chgrid)
+                sr = descData.spatialReference
+                arcpy.env.outputCoordinateSystem = sr
+                arcpy.env.snapRaster = fdir
+                arcpy.env.extent =  fdir
+
+                # Convert to stream features, then back to raster
+                StreamToFeature(chgrid, fdir, outStreams_, "NO_SIMPLIFY")            # Stream to feature
+                if ArcVersionF >= 10.5:
+                    arcidField = 'arcid'
+                else:
+                    arcidField = 'ARCID'
+                arcpy.FeatureToRaster_conversion(outStreams_, arcidField, outRaster)    # Must do this to get "ARCID" field into the raster
+
+                # Alter raster to handle some spurious nodata values (?)
+                maxValue = arcpy.SearchCursor(outStreams_, "", "", "", arcidField + " D").next().getValue(arcidField)  # Gather highest "ARCID" value from field of segment IDs
+                maxRasterValue = arcpy.GetRasterProperties_management(outRaster, "MAXIMUM")                     # Gather maximum "ARCID" value from raster
+                if int(maxRasterValue[0]) > maxValue:
+                    print('    Setting linkid values of %s to Null.' %maxRasterValue[0])
+                    whereClause = "VALUE = %s" %int(maxRasterValue[0])
+                    outRaster = SetNull(outRaster, outRaster, whereClause)          # This should eliminate the discrepency between the numbers of features in outStreams and outRaster
+                outRaster = Con(IsNull(outRaster)==1, NoDataVal, outRaster)         # Set Null values to -9999 in LINKID raster
+
+                printMessages(arcpy, ['    Creating StreamLink grid'])
+                strm = SetNull(outRaster, outRaster, "VALUE = %s" %NoDataVal)
+                strm.save(os.path.join('in_memory', 'LINKID'))
+                arcpy.Delete_management(outStreams_)
+                arcpy.Delete_management(chgrid)
+                #arcpy.Delete_management(outRaster)
+                del chgrid, maxValue, maxRasterValue, outStreams_    # outRaster
+
             else:
-                arcidField = 'ARCID'
-            arcpy.FeatureToRaster_conversion(outStreams_, arcidField, outRaster)    # Must do this to get "ARCID" field into the raster
+                printMessages(arcpy, ['    LINKID exists in FullDom file.'])
+                for ncvarname in ['LINKID', 'FLOWDIRECTION']:
+                    #nc_raster = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables[ncvarname][:]), point, grid_obj.DX, grid_obj.DY)
+                    nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables[ncvarname][:]))
+                    #arcpy.DefineProjection_management(nc_raster, sr)
+                    nc_raster.save(os.path.join('in_memory', ncvarname))
+                    arcpy.CalculateStatistics_management(nc_raster)
+                    arcpy.env.snapRaster = nc_raster
+                    if ncvarname == 'LINKID':
+                        strm = SetNull(nc_raster, nc_raster, 'VALUE = %s' %NoDataVal)
+                        strm.save(os.path.join('in_memory', 'strm'))
+                    elif ncvarname == 'FLOWDIRECTION':
+                        fdir = Int(nc_raster)
 
-            # Alter raster to handle some spurious nodata values (?)
-            maxValue = arcpy.SearchCursor(outStreams_, "", "", "", arcidField + " D").next().getValue(arcidField)  # Gather highest "ARCID" value from field of segment IDs
-            maxRasterValue = arcpy.GetRasterProperties_management(outRaster, "MAXIMUM")                     # Gather maximum "ARCID" value from raster
-            if int(maxRasterValue[0]) > maxValue:
-                print('    Setting linkid values of %s to Null.' %maxRasterValue[0])
-                whereClause = "VALUE = %s" %int(maxRasterValue[0])
-                outRaster = SetNull(outRaster, outRaster, whereClause)          # This should eliminate the discrepency between the numbers of features in outStreams and outRaster
-            outRaster = Con(IsNull(outRaster)==1, NoDataVal, outRaster)         # Set Null values to -9999 in LINKID raster
+                # Gather projection and set output coordinate system
+                descData = arcpy.Describe(strm)
+                sr = descData.spatialReference
+                arcpy.env.outputCoordinateSystem = sr
 
-            printMessages(arcpy, ['    Creating StreamLink grid'])
-            strm = SetNull(outRaster, outRaster, "VALUE = %s" %NoDataVal)
-            strm.save(os.path.join('in_memory', 'LINKID'))
-            arcpy.Delete_management(outStreams_)
-            arcpy.Delete_management(chgrid)
-            #arcpy.Delete_management(outRaster)
-            del chgrid, maxValue, maxRasterValue, outStreams_    # outRaster
+            # Create contributing watershed grid
+            GWBasns = Watershed(fdir, strm, 'VALUE')
+            arcpy.Delete_management(strm)
+            arcpy.Delete_management(fdir)
+            arcpy.Delete_management(nc_raster)
+            del strm, fdir, nc_raster, ncvarname
+            printMessages(arcpy, ['    Stream to features step complete.'])
 
-        else:
-            printMessages(arcpy, ['    LINKID exists in FullDom file.'])
-            for ncvarname in ['LINKID', 'FLOWDIRECTION']:
-                nc_raster = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables[ncvarname][:]), point, DX, DY)
-                arcpy.DefineProjection_management(nc_raster, sr)
-                nc_raster.save(os.path.join('in_memory', ncvarname))
-                arcpy.CalculateStatistics_management(nc_raster)
-                arcpy.env.snapRaster = nc_raster
-                if ncvarname == 'LINKID':
-                    strm = SetNull(nc_raster, nc_raster, 'VALUE = %s' %NoDataVal)
-                    strm.save(os.path.join('in_memory', 'strm'))
-                elif ncvarname == 'FLOWDIRECTION':
-                    fdir = Int(nc_raster)
+        elif in_method == 'Polygon Shapefile or Feature Class':
+            printMessages(arcpy, ['    Polygon Shapefile input: {0}'.format(in_Polys)])
+            #nc_raster = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables['TOPOGRAPHY'][:]), point, grid_obj.DX, grid_obj.DY)
+            nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables['TOPOGRAPHY'][:]))
+            #arcpy.DefineProjection_management(nc_raster, sr)
+            arcpy.CalculateStatistics_management(nc_raster)
 
-            # Gather projection and set output coordinate system
-            descData = arcpy.Describe(strm)
+           # Gather projection and set output coordinate system
+            descData = arcpy.Describe(nc_raster)
             sr = descData.spatialReference
             arcpy.env.outputCoordinateSystem = sr
+            arcpy.env.snapRaster = nc_raster
+            arcpy.env.extent = nc_raster
+            arcpy.env.cellSize = grid_obj.DX                                               # Set cellsize to fine grid
 
-        # Create contributing watershed grid
-        GWBasns = Watershed(fdir, strm, 'VALUE')
-        arcpy.Delete_management(strm)
-        arcpy.Delete_management(fdir)
-        arcpy.Delete_management(nc_raster)
-        del strm, fdir, nc_raster, ncvarname
-        printMessages(arcpy, ['    Stream to features step complete.'])
+            # Resolve basins on the fine grid
+            descData = arcpy.Describe(in_Polys)
+            GWBasnsFile = os.path.join('in_memory', 'poly_basins')
+            arcpy.PolygonToRaster_conversion(in_Polys, descData.OIDFieldName, GWBasnsFile, "MAXIMUM_AREA", "", grid_obj.DX)
+            GWBasns = arcpy.Raster(GWBasnsFile)                                         # Create raster object from raster layer
+            arcpy.Delete_management(nc_raster)
+            del nc_raster
 
-    elif in_method == 'Polygon Shapefile or Feature Class':
-        printMessages(arcpy, ['    Polygon Shapefile input: {0}'.format(in_Polys)])
-        nc_raster = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables['TOPOGRAPHY'][:]), point, DX, DY)
-        arcpy.DefineProjection_management(nc_raster, sr)
-        arcpy.CalculateStatistics_management(nc_raster)
+        GWBasns_arr = arcpy.RasterToNumPyArray(GWBasns)                             # Create array from raster
+        rootgrp1.close()
+        printMessages(arcpy, ['Finished building groundwater basin grids in %3.2f seconds' %(time.time()-tic1)])
+        del sr, descData
 
-       # Gather projection and set output coordinate system
-        descData = arcpy.Describe(nc_raster)
-        sr = descData.spatialReference
-        arcpy.env.outputCoordinateSystem = sr
-        arcpy.env.snapRaster = nc_raster
-        arcpy.env.extent =  nc_raster
-        cellsize = descData.children[0].meanCellHeight
-        arcpy.env.cellSize = cellsize                                               # Set cellsize to fine grid
+    except:
+        rootgrp1.close()
+        printMessages(arcpy, ['Finished building groundwater basin grids in %3.2f seconds' %(time.time()-tic1)])
+        raise SystemExit
 
-        # Resolve basins on the fine grid
-        descData = arcpy.Describe(in_Polys)
-        GWBasnsFile = os.path.join('in_memory', 'poly_basins')
-        arcpy.PolygonToRaster_conversion(in_Polys, descData.OIDFieldName, GWBasnsFile, "MAXIMUM_AREA", "", cellsize)
-        GWBasns = arcpy.Raster(GWBasnsFile)                                         # Create raster object from raster layer
-        arcpy.Delete_management(nc_raster)
-        del nc_raster, cellsize
-
-    GWBasns_arr = arcpy.RasterToNumPyArray(GWBasns)                             # Create array from raster
-    rootgrp1.close()
-
-    printMessages(arcpy, ['Finished building groundwater basin grids in {0:3.2f} seconds'.format(time.time()-tic1)])
-    del arcpy, descData, sr, rootgrp1, tic1
+    del arcpy, rootgrp1, tic1
     return GWBasns, GWBasns_arr
 
-def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, cellsize, ll, sr2, map_pro, GeoTransform, tbl_type='.nc', Grid=True):
+def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, coarse_grid, tbl_type='.nc', Grid=True):
     '''
     5/17/2017: This function will build the groundwater bucket grids and parameter
                tables.
@@ -2284,7 +2434,7 @@ def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, cellsize, ll, sr2, ma
     del UniqueVals
 
     GW_BUCKS = os.path.join('in_memory', 'GWBUCKS_orig')                        # Groundwater bucket raster on the coarse grid before re-numbering 1...n
-    arcpy.Resample_management(GWBasns, GW_BUCKS, cellsize, "NEAREST")           # Resample from find grid to coarse grid resolution
+    coarse_grid.project_to_model_grid(arcpy, GWBasns, GW_BUCKS, resampling="NEAREST")   # Resample from fine grid to coarse grid resolution
     arcpy.Delete_management(GWBasns)                                            # Delete original fine-grid groundwater basin raster
     del GWBasns, GWBasns_arr
 
@@ -2314,24 +2464,23 @@ def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, cellsize, ll, sr2, ma
     del UniqueVals2
 
     # Build rasters and arrays to create the NC or ASCII outputs
-    GW_BUCKS = arcpy.NumPyArrayToRaster(GWBasns_arr3, lower_left_corner=ll, x_cell_size=cellsize, y_cell_size=cellsize, value_to_nodata=new_ndv)
+    GW_BUCKS = coarse_grid.numpy_to_Raster(arcpy, GWBasns_arr3, value_to_nodata=new_ndv)
     GW_BUCKS2 = os.path.join(out_dir, "GWBUCKS")                                # Raster file location
     GW_BUCKS.save(GW_BUCKS2)                                                    # Save raster
-    del GWBasns_arr3, ll, idx, to_values, new_ndv
+    del GWBasns_arr3, idx, to_values, new_ndv
 
     # If requested, create 2D gridded bucket parameter table
     if Grid == True:
         if 'nc' in out_2Dtype:
-            build_GWBASINS_nc(arcpy, GW_BUCKS2, out_dir, GW_BUCKS2, sr2, map_pro, GeoTransform)
+            build_GWBASINS_nc(arcpy, GW_BUCKS2, out_dir, coarse_grid)
         if 'ascii' in out_2Dtype:
-            build_GWBASINS_ascii(arcpy, GW_BUCKS2, out_dir, cellsize)
-    del sr2, map_pro, GeoTransform
+            build_GWBASINS_ascii(arcpy, GW_BUCKS2, out_dir, coarse_grid.DX)
 
     # Alternate method to obtain IDs - read directly from raster attribute table
     printMessages(arcpy, ['    Calculating size and ID parameters for basin polygons.'])
     Raster_arr = arcpy.da.TableToNumPyArray(GW_BUCKS2, '*')
     cat_comids = Raster_arr['VALUE'].tolist()
-    cat_areas = [float((item*(cellsize**2))/1000000) for item in Raster_arr['COUNT'].tolist()]  # Assumes cellsize is in units of meters
+    cat_areas = [float((item*(coarse_grid.DX**2))/1000000) for item in Raster_arr['COUNT'].tolist()]  # Assumes cellsize is in units of meters
     arcpy.Delete_management(GW_BUCKS)
     arcpy.Delete_management(GW_BUCKS2)
     del GW_BUCKS, GW_BUCKS2, Raster_arr
@@ -2343,10 +2492,10 @@ def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, cellsize, ll, sr2, ma
     del cat_comids, cat_areas
     arcpy.Delete_management('in_memory')
     printMessages(arcpy, ['Finished building groundwater parameter files in {0:3.2f} seconds'.format(time.time()-tic1)])
-    del arcpy, tic1, tbl_type, cellsize, out_dir, Grid   # Attempt to get the script to release the Fulldom_hires.nc file
+    del arcpy, tic1, tbl_type, out_dir, Grid, coarse_grid   # Attempt to get the script to release the Fulldom_hires.nc file
     return
 
-def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold, LU_INDEX, cellsize1, cellsize2, routing, in_lakes, lakeIDfield=None):
+def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold, routing, WKT='', in_lakes=None, lakeIDfield=None):
     """The last major function in the processing chain is to perform the spatial
     analyst functions to hydrologically process the input raster datasets."""
 
@@ -2370,6 +2519,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     arcpy.MakeRasterLayer_management(mosprj, 'mosaicprj')
     descData = arcpy.Describe('mosaicprj')
     sr2 = descData.spatialReference
+    cellsize = descData.meanCellHeight
     arcpy.env.outputCoordinateSystem = sr2
     arcpy.env.workspace = projdir
     arcpy.env.scratchWorkspace = projdir
@@ -2516,7 +2666,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
         elif maskRL:
             rasterExp = "Value < 0"                                         # Only channels within the masked basin will be in reach-based routing file
         strm2 = SetNull(channelgrid, channelgrid, rasterExp)                    # Alter channelgrid such that -9999 and -1 to be NoData
-        linkid = Routing_Table(arcpy, projdir, sr2, strm2, fdir, fill2, order2, gages=frxst_raster, Lakes=in_lakes)
+        linkid = Routing_Table(arcpy, projdir, sr2, strm2, fdir, fill2, order2, WKT=WKT, gages=frxst_raster, Lakes=in_lakes)
         linkid_var = rootgrp.variables['LINKID']
         linkid_arr = arcpy.RasterToNumPyArray(linkid)
         linkid_var[:] = linkid_arr
@@ -2543,7 +2693,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     else:
         # Alter Channelgrid for reservoirs
         fill2.save(os.path.join(projdir, 'fill2.tif'))                              # Added 6/4/2019 to keep ArcGIS 10.6.1 from crashing later on in the lake script
-        arcpy, channelgrid_arr, outRaster_arr = add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize2, sr2, lakeIDfield)
+        arcpy, channelgrid_arr, outRaster_arr = add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield)
 
         # Process: Output LAKEGRID
         outRaster_var = rootgrp.variables['LAKEGRID']
@@ -2558,18 +2708,6 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     arcpy.Delete_management(flac)
     del constraster, fdir, flac, strm, channelgrid, fill2, channelgrid_arr, constraster_arr
 
-    # Process: Resample LU_INDEX grid to a higher resolution
-    LU_INDEX2 = os.path.join(projdir, "LU_INDEX")
-    outLU_INDEX = os.path.join(projdir, "LU_INDEX1")                            # Added 11/25/2018 to constrain the output extent of the resampled LU_INDEX raster.
-    LU_INDEX.save(outLU_INDEX)                                                  # Added 11/25/2018 to constrain the output extent of the resampled LU_INDEX raster. Somehow saving the input makes a difference to the output
-    arcpy.Resample_management(outLU_INDEX, LU_INDEX2, cellsize2, "NEAREST")
-    LU_INDEX2_var = rootgrp.variables['landuse']
-    LU_INDEX2_arr = arcpy.RasterToNumPyArray(LU_INDEX2)
-    LU_INDEX2_var[:] = LU_INDEX2_arr
-    printMessages(arcpy, ['    Process: landuse written to output netCDF.'])
-    arcpy.Delete_management(LU_INDEX2)
-    del LU_INDEX2, LU_INDEX2_arr
-
     # Clean up
     arcpy.Delete_management('mosaicprj')
     arcpy.Delete_management(mosprj)
@@ -2577,7 +2715,8 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     printMessages(arcpy, ['    Step 4 completed without error.'])
     return rootgrp
 
+# --- End Functions --- #
+
 if __name__ == '__main__':
     '''Protect this script against import from another script.'''
     pass
-# --- End Functions --- #
