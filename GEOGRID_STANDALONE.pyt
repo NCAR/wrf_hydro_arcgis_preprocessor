@@ -266,9 +266,8 @@ class ProcessGeogridFile(object):
 
     def execute(self, parameters, messages):
         """The source code of the tool."""
-        reload(wrfh)
-        tic = time.time()
-        reload(wrfh)                                             # Reload in case code changes have been made
+        reload(wrfh)                                                            # Reload in case code changes have been made
+        tic = time.time()                                                       # Initiate timer
         isError = False                                                         # Starting Error condition (no errors)
 
         # Gather all necessary parameters
@@ -346,7 +345,7 @@ class ProcessGeogridFile(object):
         LU_INDEX = coarse_grid.numpy_to_Raster(arcpy, wrfh.flip_grid(rootgrp.variables['LU_INDEX'][0]))
         out_nc1 = os.path.join(projdir, wrfh.LDASFile)
         rootgrp1 = netCDF4.Dataset(out_nc1, 'w', format=outNCType)              # wrfh.outNCType)
-        rootgrp1 = wrfh.create_CF_NetCDF(arcpy, coarse_grid, rootgrp1, projdir, addLatLon=False, notes=processing_notes_SM)
+        rootgrp1 = wrfh.create_CF_NetCDF(arcpy, coarse_grid, rootgrp1, addLatLon=False, notes=processing_notes_SM)
         rootgrp1.proj4 = coarse_grid.proj4                                      # Add proj.4 string as a global attribute
         rootgrp1.close()
         del rootgrp1
@@ -387,15 +386,14 @@ class ProcessGeogridFile(object):
             wgs84_proj = arcpy.SpatialReference()                               # Project lake points to whatever coordinate system is specified by wkt_text in globals
             wgs84_proj.loadFromString(wrfh.wkt_text)                            # Load the Sphere datum CRS using WKT
             xmap, ymap = fine_grid.getxy()                                      # Get x and y coordinates as numpy array
-            latArr2, lonArr2 = wrfh.ReprojectCoords(xmap, ymap, coarse_grid.proj, wgs84_proj)  # Transform coordinate arrays
+            latArr2, lonArr2 = wrfh.ReprojectCoords(arcpy, xmap, ymap, coarse_grid.proj, wgs84_proj)  # Transform coordinate arrays
             del xmap, ymap, wgs84_proj
 
         # Create FULLDOM file
         out_nc2 = os.path.join(projdir, wrfh.FullDom)
         rootgrp2 = netCDF4.Dataset(out_nc2, 'w', format=outNCType)              # wrfh.outNCType)
-        rootgrp2 = wrfh.create_CF_NetCDF(arcpy, fine_grid, rootgrp2, projdir,
-                addLatLon=True, notes=processing_notesFD, addVars=varList2D,
-                latArr=latArr2, lonArr=lonArr2)
+        rootgrp2 = wrfh.create_CF_NetCDF(arcpy, fine_grid, rootgrp2, addLatLon=True,
+            notes=processing_notesFD, addVars=varList2D, latArr=latArr2, lonArr=lonArr2)
 
         # Add some global attribute metadata to the Fulldom file, including relevant WPS attributes for defining the model coordinate system
         rootgrp2.geogrid_used = in_nc                                           # Paste path of geogrid file to the Fulldom global attributes
@@ -459,9 +457,9 @@ class ProcessGeogridFile(object):
             zipper = wrfh.zipUpFolder(arcpy, projdir, out_zip, nclist)
             wrfh.printMessages(arcpy, ['Completed without error in {0} seconds.'.format(time.time()-tic)])
             arcpy.env.workspace = projdir
-            #for infile in arcpy.ListDatasets():
-            #    arcpy.Delete_management(infile)
-            #arcpy.Delete_management(projdir)
+            for infile in arcpy.ListDatasets():
+                arcpy.Delete_management(infile)
+            arcpy.Delete_management(projdir)
         tee.close()
         del tee
         return
@@ -921,8 +919,7 @@ class SpatialMetadataFile(object):
 
         # Create the netCDF file with spatial metadata
         rootgrp = netCDF4.Dataset(out_nc, 'w', format=outNCType)
-        rootgrp = wrfh.create_CF_NetCDF(arcpy, grid_obj, rootgrp, projdir,
-                addLatLon=latlon_vars, notes=processing_notes_SM)
+        rootgrp = wrfh.create_CF_NetCDF(arcpy, grid_obj, rootgrp, addLatLon=latlon_vars, notes=processing_notes_SM)
         rootgrp.close()
         wrfh.printMessages(arcpy, ['Completed without error in {0} seconds.'.format(time.time()-tic1)])
         tee.close()
@@ -1088,7 +1085,8 @@ class Reach_Based_Routing_Addition(object):
         # Add a check for lakes in the routing stack. Terminate if lakes are found
         if os.path.isfile(os.path.join(projdir, wrfh.LK_nc)):
             # This means that LAKEPARM is in the input routing stack. Terminate
-            msg ='The input routing stack already has lakes in it. it is not a good idead to add reaches because network connectivity may be compromised. Exiting...'
+            msg ='The input routing stack already has lakes in it. it is not a good idea ' \
+                'to add reaches because network connectivity may be compromised. Exiting...'
             messages.addErrorMessage(msg)
             raise SystemExit
 
@@ -1425,4 +1423,5 @@ class GWBUCKPARM(object):
         tee.close()
         del projdir, tbl_type, GWBasns, GWBasns_arr, in_geo, in_Polys, in_method, tee
         return
+
 # --- End Toolbox Classes --- #

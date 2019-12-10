@@ -16,8 +16,10 @@
 '''
 
 # Import Python core modules
-import os
 import sys
+sys.dont_write_bytecode = True
+
+import os
 import time
 import csv
 
@@ -30,7 +32,6 @@ from operator import itemgetter                                                 
 import collections                                                              # Used in the group_min function
 
 # Module configurations
-sys.dont_write_bytecode = True
 datestr = time.strftime("%Y_%m_%d")                                             # Date string to append to output files
 
 ###################################################
@@ -84,7 +85,7 @@ def Waterbody_SpatialJoin(arcpy, Flowline, Waterbody, fields, NJ=True, outDir=No
         # Other match options: ["WITHIN","INTERSECT"]
         arcpy.SpatialJoin_analysis(target_features=Flowline, join_features=Waterbody, out_feature_class=OutFC, join_operation="JOIN_ONE_TO_MANY", join_type="KEEP_COMMON", match_option="HAVE_THEIR_CENTER_IN")
         intersectarr = arcpy.da.FeatureClassToNumPyArray(OutFC, fields)
-        #arcpy.Delete_management(OutFC)
+        arcpy.Delete_management(OutFC)
     else:
         print("  Using previously intersected feature class of flowlines to waterbodies: {0}.".format(Waterbody))
         intersectarr = arcpy.da.FeatureClassToNumPyArray(Waterbody, fields)
