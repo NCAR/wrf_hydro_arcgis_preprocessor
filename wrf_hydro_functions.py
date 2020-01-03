@@ -20,15 +20,19 @@ import zipfile
 from zipfile import ZipFile, ZipInfo
 import shutil
 from collections import defaultdict                                             # Added 09/03/2015Needed for topological sorting algorthm
-from itertools import takewhile, count                                          # Added 09/03/2015Needed for topological sorting algorthm                                                                  # Added 07/10/2015 for ExmineOutputs
+from itertools import takewhile, count, izip                                    # Added 09/03/2015Needed for topological sorting algorthm                                                                  # Added 07/10/2015 for ExmineOutputs
 import netCDF4
 import numpy
-from arcpy.sa import *                                                                 # Part of ArcGIS 10.3, added to this script 6/11/2015
+from arcpy.sa import *                                                          # Part of ArcGIS 10.3, added to this script 6/11/2015
 
-try:
-    import LAKE_PROCESSING_MODULE as LK_Routing
-except:
-    pass
+# Pure python method of getting unique sums - from http://stackoverflow.com/questions/4373631/sum-array-by-number-in-numpy
+from operator import itemgetter                                                 # Used in the group_min function
+import collections                                                              # Used in the group_min function
+
+##try:
+##    import LAKE_PROCESSING_MODULE as LK_Routing
+##except:
+##    pass
 # --- End Import Modules --- #
 
 # --- Module Configurations --- #
@@ -37,17 +41,8 @@ sys.dont_write_bytecode = True                                                  
 
 # --- Globals --- #
 
-# Initiate dictionaries of GEOGRID projections and parameters
-#   See http://www.mmm.ucar.edu/wrf/users/docs/user_guide_V3/users_guide_chap3.htm#_Description_of_the_1
-projdict = {1: 'Lambert Conformal Conic',
-            2: 'Polar Stereographic',
-            3: 'Mercator',
-            6: 'Cylindrical Equidistant'}
-CF_projdict = {1: "lambert_conformal_conic",
-               2: "polar_stereographic",
-               3: "mercator",
-               6: "latitude_longitude",
-               0: "crs"}
+###################################################
+# Output options
 
 # Output file types
 outNCType = 'NETCDF4_CLASSIC'                                                   # Define the output netCDF version for RouteLink.nc and LAKEPARM.nc
@@ -65,13 +60,12 @@ GW_TBL = 'GWBUCKPARM.TBL'
 StreamSHP = 'streams.shp'                                                       # Default streams shapefile name
 TempLakeFIle = 'in_lakes_clip.shp'                                              # Temporary output lake file (clipped to domain)
 LakesShp = 'lakes.shp'                                                          # Default lake shapefile name
+###################################################
 
-# Options
-maskRL = False                                                                  # Allow masking of channels in RouteLink file. May cause WRF-Hydro to crash if True
+###################################################
+# Other Options
 PpVersion = 'v5.1.1 (12/2019)'                                                  # WRF-Hydro ArcGIS Pre-processor version to add to FullDom metadata
 CFConv = 'CF-1.5'                                                               # CF-Conventions version to place in the 'Conventions' attribute of RouteLink files
-
-# Other Global Variables
 NoDataVal = -9999                                                               # Default NoData value for gridded variables
 walker = 3                                                                      # Number of cells to walk downstream before gaged catchment delineation
 LK_walker = 3                                                                   # Number of cells to walk downstream to get minimum lake elevation
@@ -79,14 +73,24 @@ z_limit = 1000.0                                                                
 lksatfac_val = 1000.0                                                           # Default LKSATFAC value (unitless coefficient)
 minDepth = 1.0                                                                  # Minimum active lake depth for lakes with no elevation variation
 
-# Global attributes for altering the sphere radius used in computations. Do not alter sphere_radius for standard WRF-Hydro simulations
-sphere_radius = 6370000.0                                                       # Radius of sphere to use (WRF Default = 6370000.0m)
-wkt_text = "GEOGCS['GCS_Sphere_CUSTOM',DATUM['D_Sphere',SPHEROID['Sphere',%s,0.0]],PRIMEM['Greenwich',0.0],UNIT['Degree',0.0174532925199433]];-400 -400 1000000000;-100000 10000;-100000 10000;8.99462786704589E-09;0.001;0.001;IsHighPrecision" %sphere_radius
+# Elevation resampling method. Options: ["NEAREST", "BILINEAR", "CUBIC", "MAJORITY"]
+ElevResampleMethod = "BILINEAR"                                                 # Method to be used for resampling high-resolution elevation to the model grid
+###################################################
 
-# Unify all coordinate system variables to have the same name ("crs"). Ths makes it easier for WRF-Hydro output routines to identify the variable and transpose it to output files
-crsVarname = True                                                               # Switch to make all coordinate system variables = "crs" instead of related to the coordinate system name
-crsVar = CF_projdict[0]                                                         # Expose this as a global for other functions in other scripts to use
-#crsVar = 'ProjectionCoordinateSystem'
+###################################################
+# Geospatial Parameters
+
+# Initiate dictionaries of GEOGRID projections and parameters
+#   See http://www.mmm.ucar.edu/wrf/users/docs/user_guide_V3/users_guide_chap3.htm#_Description_of_the_1
+projdict = {1: 'Lambert Conformal Conic',
+            2: 'Polar Stereographic',
+            3: 'Mercator',
+            6: 'Cylindrical Equidistant'}
+CF_projdict = {1: "lambert_conformal_conic",
+               2: "polar_stereographic",
+               3: "mercator",
+               6: "latitude_longitude",
+               0: "crs"}
 
 # Point time-series CF-netCDF file coordinate system
 '''Note that the point netCDF files are handled using a separate coordinate system than the grids.
@@ -98,6 +102,24 @@ spheroid dramatically increases the runtime of the tools, with clear obvious ben
 pointCF = True                                                                  # Switch to turn on CF-netCDF point time-series metadata attributes
 pointSR = 4326                                                                  # The spatial reference system of the point time-series netCDF files (RouteLink, LAKEPARM). NAD83=4269, WGS84=4326
 
+# Global attributes for altering the sphere radius used in computations. Do not alter sphere_radius for standard WRF-Hydro simulations
+sphere_radius = 6370000.0                                                       # Radius of sphere to use (WRF Default = 6370000.0m)
+wkt_text = "GEOGCS['GCS_Sphere_CUSTOM',DATUM['D_Sphere',SPHEROID['Sphere',%s,0.0]],PRIMEM['Greenwich',0.0],UNIT['Degree',0.0174532925199433]];-400 -400 1000000000;-100000 10000;-100000 10000;8.99462786704589E-09;0.001;0.001;IsHighPrecision" %sphere_radius
+#same_spehre = arcpy.SpatialReference(104128)                                   # EMEP sphere (same radius as WRF sphere)
+
+# Unify all coordinate system variables to have the same name ("crs"). Ths makes it easier for WRF-Hydro output routines to identify the variable and transpose it to output files
+crsVarname = True                                                               # Switch to make all coordinate system variables = "crs" instead of related to the coordinate system name
+crsVar = CF_projdict[0]                                                         # Expose this as a global for other functions in other scripts to use
+#crsVar = 'ProjectionCoordinateSystem'
+
+#Custom Geotransformations for spheroid-to-sphere translation
+geoTransfmName = "GeoTransform_Null_WRFHydro"                                   # Custom Geotransformation Name
+customGeoTransfm = "GEOGTRAN[METHOD['Null']]"                                   # Null Transformation
+#customGeoTransfm = "GEOGTRAN[METHOD['Geocentric_Translation'],PARAMETER['X_Axis_Translation',''],PARAMETER['Y_Axis_Translation',''],PARAMETER['Z_Axis_Translation','']]"   # Zero-parameter Geocentric Translation
+#customGeoTransfm = "GEOGTRAN[METHOD['Geocentric_Translation'],PARAMETER['X_Axis_Translation',0.0],PARAMETER['Y_Axis_Translation',0.0],PARAMETER['Z_Axis_Translation',0.0]]"
+###################################################
+
+###################################################
 # Channel Routing default parameters
 Qi = 0                                                                          # Initial Flow in link (cms)
 MusK = 3600                                                                     # Muskingum routing time (s)
@@ -106,7 +128,11 @@ n = 0.035                                                                       
 ChSlp = 0.05                                                                    # Channel Side Slope (%; drop/length)
 BtmWdth = 5                                                                     # Bottom Width of Channel (m)
 Kc = 0                                                                          # channel conductivity (mm/hour)
+maskRL = False                                                                  # Allow masking of channels in RouteLink file. May cause WRF-Hydro to crash if True
+Streams_addFields = ['link', 'to', 'gages', 'Lake']                             # Variables from RouteLink file to add to the output stream shapefile (for convenience, plotting in GIS)
+###################################################
 
+###################################################
 #Default Lake Routing parameters
 OrificeC = 0.1
 OrificA = 1.0
@@ -115,22 +141,29 @@ WeirL = 10.0                                                                    
 ifd_Val = 0.90                                                                  # Default initial fraction water depth (90%)
 out_LKtype = ['nc']                                                             # Default output lake parameter file format ['nc', 'ascii']
 defaultLakeID = "NEWID"                                                         # Default new LakeID field for lakes, numbered 1..n
+Lakes_addFields = ['lake_id']                                                   # Variables from LAKEPARM file to add to the output lake shapefile (for convenience, plotting in GIS)
+###################################################
 
+###################################################
 # Default groundwater bucket (GWBUCKPARM) parameters
 coeff = 1.0000                                                                  # Bucket model coefficient
 expon = 3.000                                                                   # Bucket model exponent
 zmax = 50.00                                                                    # Conceptual maximum depth of the bucket
 zinit = 10.0000                                                                 # Initial depth of water in the bucket model
-out_2Dtype = ['nc']                                                             # Default output 2D groundwater bucket grid format ['nc', 'ascii']
+out_2Dtype = ['nc']                                                             # Default output 2D groundwater bucket grid format: ['nc', 'ascii']
+out_1Dtype = '.nc'                                                              # Default output 1D groundwater parameter (GWBUCKPARM.nc) format: ['.nc', '.nc and .TBL', '.TBL']
+###################################################
 
-#Custom Geotransformations for spheroid-to-sphere translation
-geoTransfmName = "GeoTransform_Null_WRFHydro"                                   # Custom Geotransformation Name
-customGeoTransfm = "GEOGTRAN[METHOD['Null']]"                                   # Null Transformation
-#customGeoTransfm = "GEOGTRAN[METHOD['Geocentric_Translation'],PARAMETER['X_Axis_Translation',''],PARAMETER['Y_Axis_Translation',''],PARAMETER['Z_Axis_Translation','']]"   # Zero-parameter Geocentric Translation
-#customGeoTransfm = "GEOGTRAN[METHOD['Geocentric_Translation'],PARAMETER['X_Axis_Translation',0.0],PARAMETER['Y_Axis_Translation',0.0],PARAMETER['Z_Axis_Translation',0.0]]"
-
-# Elevation resampling method. Options: ["NEAREST", "BILINEAR", "CUBIC", "MAJORITY"]
-ElevResampleMethod = "BILINEAR"                                                 # Method to be used for resampling high-resolution elevation to the model grid
+###################################################
+# Globals that support lake pre-processing
+datestr = time.strftime("%Y_%m_%d")                                             # Date string to append to output files
+FLID = "ARCID"                                                                  # Field name for the flowline IDs
+LakeAssoc = 'WBAREACOMI'                                                        # Field name containing link-to-lake association
+NoDownstream = [None, -1, 0]                                                    # A list of possible values indicating that the downstream segment is invalid (ocean, network endpoint, etc.)
+LkNodata = 0                                                                    # Set the nodata value for the link-to-lake association
+hydroSeq = 'HydroSeq'                                                           # Fieldname that stores a hydrologic sequence (ascending from downstream to upstream)
+save_Lake_Link_Type_arr = True                                                  # Switch for saving the Lake_Link_Type_arr array to CSV
+###################################################
 
 # --- End Globals --- #
 
@@ -402,9 +435,8 @@ class WRF_Hydro_Grid:
                                      'UNIT["Meter",1.0]]')                          # 'UNIT["Degree", 1.0]]') # ?? For lat-lon grid?
                 proj4 = ("+proj=eqc +units=meters +a={} +b={} +lon_0={}".format(str(sphere_radius), str(sphere_radius), str(central_meridian)))
 
-        sr2.loadFromString(Projection_String)
-
         # Create a point geometry object from gathered corner point data
+        sr2.loadFromString(Projection_String)
         sr1 = arcpy.SpatialReference()
         sr1.loadFromString(wkt_text)                                                # Load the Sphere datum CRS using WKT
         point = arcpy.Point()
@@ -420,7 +452,7 @@ class WRF_Hydro_Grid:
         self.x00 = point2.X                                                     # X value doesn't change from LLcorner to UL corner
         self.y00 = point2.Y + float(abs(self.DY)*self.nrows)                    # Adjust Y from LL to UL
         self.proj = sr2
-        self.WKT = sr2.exportToString().replace("'", '"')                       # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
+        self.WKT = Projection_String.replace("'", '"')                          # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
         self.proj4 = proj4
         self.point = point2
         self.map_pro = map_pro
@@ -586,6 +618,31 @@ class WRF_Hydro_Grid:
         del point, multipliersX, multipliersY, multiX, multiY
         return points
 
+    # Function to determine a set of corner lats and lons from a single available value
+    def find_latlon(self, arcpy, inpoint):
+        '''
+        Take a grid cell center point and produce a list of all the corners
+        coordinates for that point.
+        '''
+        # Setup the lat/lon point CRS
+        insrs = arcpy.SpatialReference(pointSR)
+
+        # Create coordinate transform for this point and transform
+        pointGeometry = arcpy.PointGeometry(inpoint, insrs)
+        projpoint = pointGeometry.projectAs(self.proj)                                # Convert to latitude/longitude on the sphere
+
+        # Gather all corner coordinates for this point in projected space
+        points = self.getgrid(arcpy, projpoint.firstPoint.X, projpoint.firstPoint.Y)
+
+        # Conver back to original coordinate system coordinates
+        points_proj = []
+        for num, pt in enumerate(points):
+            pt2 = points[num]
+            pt2.projectAs(insrs)
+            points_proj.append(pt2)
+        del num, pt, pt2, inpoint, points, pointGeometry
+        return points_proj                                                          # Return list of out-points
+
 # --- End Classes --- #
 
 # --- Functions --- #
@@ -652,10 +709,10 @@ def zipUpFolder(arcpy, folder, outZipFile, nclist):
         pass
 
 def flip_grid(array):
-    '''This function takes a three dimensional array and flips it up-down to
-    correct for the netCDF storage of these grids.'''
-    array = array[:, ::-1]                                                     # Flip 2+D grid up-down
-    return array
+    '''This function takes a two dimensional array and flips it up-down to
+    correct for the netCDF storage of these grids. The y-dimension must be the
+    last dimension (final axis) of the array.'''
+    return array[::-1]                                                         # Flip 2+D grid up-down
 
 def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
     """This tool takes the output zip file from the ProcessGeogrid script and creates a raster
@@ -668,10 +725,10 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
     out_sfolder = arcpy.CreateScratchName("temp", data_type="Folder", workspace=arcpy.env.scratchFolder)
     os.mkdir(out_sfolder)
 
+    dellist = []                                                                # Keep a directory of files to delete
+
     # Unzip to a known location (make sure no other nc files live here)
     ZipCompat(in_zip).extractall(out_sfolder)
-
-    dellist = []                                                                # Keep a directory of files to delete
 
     # Iterate through unzipped files and copy to output directory as necessary
     for dirpath, dirnames, filenames in os.walk(out_sfolder):
@@ -687,7 +744,6 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
             # Ignore the GEOGRID LDASOUT spatial metadata file
             if file == LDASFile:
                 shutil.copy2(infile, out_folder)
-
                 printMessages(arcpy, ['  File Copied: {0}'.format(file)])
                 continue
 
@@ -753,34 +809,6 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
         os.remove(infile)
     printMessages(arcpy, ['Extraction of WRF routing grids completed.'])
     return out_sfolder
-
-# The following lambda function will read a 2D grid and provide the corner values
-corner_coords = lambda x: list((x[0, 0], x[-1, 0], x[-1, -1], x[0, -1]))
-
-# Function to determine a set of corner lats and lons from a single available value
-def find_latlon(arcpy, inpoint, grid_obj):
-    '''
-    Take a grid cell center point and produce a list of all the corners
-    coordinates for that point.
-    '''
-    # Setup the lat/lon point CRS
-    insrs = arcpy.SpatialReference(pointSR)
-
-    # Create coordinate transform for this point and transform
-    pointGeometry = arcpy.PointGeometry(inpoint, insrs)
-    projpoint = pointGeometry.projectAs(grid_obj.proj)                                # Convert to latitude/longitude on the sphere
-
-    # Gather all corner coordinates for this point in projected space
-    points = grid_obj.getgrid(arcpy, projpoint.firstPoint.X, projpoint.firstPoint.Y)
-
-    # Conver back to original coordinate system coordinates
-    points_proj = []
-    for num, pt in enumerate(points):
-        pt2 = points[num]
-        pt2.projectAs(insrs)
-        points_proj.append(pt2)
-    del num, pt, pt2, inpoint, points, pointGeometry
-    return points_proj                                                          # Return list of out-points
 
 def add_CRS_var(rootgrp, sr, map_pro, CoordSysVarName, grid_mapping, PE_string, GeoTransformStr=None):
     '''
@@ -893,7 +921,7 @@ def create_CF_NetCDF(arcpy, grid_obj, rootgrp, addLatLon=False, notes='', addVar
     dim1size = grid_obj.ncols
     dim2size = grid_obj.nrows
     srType = sr.type
-    PE_string = grid_obj.WKT                           # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
+    PE_string = grid_obj.WKT
     printMessages(arcpy, ['    Esri PE String: {0}'.format(PE_string)])
 
     # Find name for the grid mapping
@@ -1149,6 +1177,46 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     printMessages(arcpy, ['    Step 2 completed without error.'])
     return mosprj
 
+def coordMethod1(arcpy, coarse_grid, fine_grid, rootgrp, projdir='in_memory'):
+    # Method 1: Build latitude and longitude arrays for Fulldom_hires netCDF file
+    printMessages(arcpy, ['    Deriving geocentric coordinates on routing grid from bilinear interpolation of geogrid coordinates.'])
+
+    # Build latitude and longitude arrays for GEOGRID_LDASOUT spatial metadata file
+    latArr = flip_grid(rootgrp.variables['XLAT_M'][0])                          # Extract array of GEOGRID latitude values
+    lonArr = flip_grid(rootgrp.variables['XLONG_M'][0])                         # Extract array of GEOGRID longitude values
+
+    # Method 1: Use GEOGRID latitude and longitude fields and resample to routing grid
+    latRaster1 = coarse_grid.numpy_to_Raster(arcpy, latArr)                     # Build raster out of GEOGRID latitude array - may only work in python 2
+    lonRaster1 = coarse_grid.numpy_to_Raster(arcpy, lonArr)                     # Build raster out of GEOGRID longitude array - may only work in python2
+    ##latRaster1 = coarse_grid.numpy_to_Raster(arcpy, latArr.data[0])           # Build raster out of GEOGRID latitude array - may only work in python3
+    ##lonRaster1 = coarse_grid.numpy_to_Raster(arcpy, lonArr.data[0])           # Build raster out of GEOGRID longitude array - may only work in python3
+
+    xout = os.path.join(projdir, 'xoutput')
+    yout = os.path.join(projdir, 'youtput')
+    fine_grid.project_to_model_grid(arcpy, latRaster1, yout, resampling="BILINEAR") # Regrid from GEOGRID resolution to routing grid resolution
+    fine_grid.project_to_model_grid(arcpy, lonRaster1, xout, resampling="BILINEAR") # Regrid from GEOGRID resolution to routing grid resolution
+    latRaster2 = arcpy.Raster(yout)                                             # Regrid from GEOGRID resolution to routing grid resolution
+    lonRaster2 = arcpy.Raster(xout)                                             # Regrid from GEOGRID resolution to routing grid resolution
+    del latRaster1, lonRaster1
+
+    latArr2 = arcpy.RasterToNumPyArray(latRaster2)
+    lonArr2 = arcpy.RasterToNumPyArray(lonRaster2)
+    arcpy.Delete_management(xout)
+    arcpy.Delete_management(yout)
+    del latArr, lonArr, latRaster2, lonRaster2
+    return latArr2, lonArr2
+
+def coordMethod2(arcpy, grid_obj):
+    # Method 2: Transform each point from projected coordinates to geocentric coordinates
+    printMessages(arcpy, ['    Deriving geocentric coordinates on routing grid from direct transformation of geogrid coordinates.'])
+
+    wgs84_proj = arcpy.SpatialReference()                                       # Project lake points to whatever coordinate system is specified by wkt_text in globals
+    wgs84_proj.loadFromString(wkt_text)                                         # Load the Sphere datum CRS using WKT
+    xmap, ymap = grid_obj.getxy()                                               # Get x and y coordinates as numpy array
+    latArr2, lonArr2 = ReprojectCoords(arcpy, xmap, ymap, grid_obj.proj, wgs84_proj)  # Transform coordinate arrays
+    del xmap, ymap, wgs84_proj
+    return latArr2, lonArr2
+
 def getxy(arcpy, inraster, projdir):
     """
     This function will use the affine transformation (GeoTransform) to produce an
@@ -1198,7 +1266,7 @@ def getxy(arcpy, inraster, projdir):
     printMessages(arcpy, ['    Conversion of input raster to XMap/YMap completed without error.'])
     return xmap, ymap
 
-def create_lat_lon_rasters(arcpy, projdir, mosprj, wkt_text):
+def create_lat_lon_rasters(arcpy, projdir, mosprj, wkt_text, method="BILINEAR"):
     """The third function in the process is to create the latitude and longitude
     rasters that are necessary for running wrf-hydro.  The latitude and longitude
     that are given by the cell values in the resulting output grids are the latitude
@@ -1211,7 +1279,7 @@ def create_lat_lon_rasters(arcpy, projdir, mosprj, wkt_text):
     # Initiate logging
     printMessages(arcpy, ['    Latitude and Longitude grid generation initiated...'])
 
-    # Create Constant Raster in-memory so we don't have to send the hgt_m layer
+    # Create Constant Raster in-memory so we don't have to
     arcpy.env.outputCoordinateSystem = mosprj
     arcpy.env.snapRaster = mosprj
     arcpy.env.extent = mosprj
@@ -1226,7 +1294,7 @@ def create_lat_lon_rasters(arcpy, projdir, mosprj, wkt_text):
     # Project constant raster to geocentric coordinates system
     projraster = os.path.join(projdir, 'mosprj2')
     arcpy.ResetEnvironments()
-    arcpy.env.outputCoordinateSystem = sr1                                      #arcpy.env.outputCoordinateSystem = arcpy.SpatialReference(104128)           # EMEP sphere (same as WRF sphere)
+    arcpy.env.outputCoordinateSystem = sr1
     arcpy.CopyRaster_management(OutRas, projraster)
 
     # Create xmap/ymap grids
@@ -1247,8 +1315,9 @@ def create_lat_lon_rasters(arcpy, projdir, mosprj, wkt_text):
 
     # Project the input CRS to the output CRS
     # Change to "BILINEAR" or "CUBIC" interpolation method to reduce the issue James found of redundancy in some coordinate values.
-    arcpy.ProjectRaster_management(xmap, xout, sr2, "BILINEAR", CellSize, "#", "#", sr1)        # "NEAREST"
-    arcpy.ProjectRaster_management(ymap, yout, sr2, "BILINEAR", CellSize, "#", "#", sr1)        # "NEAREST"
+    # Options: "NEAREST", "BILINEAR", "CUBIC"
+    arcpy.ProjectRaster_management(xmap, xout, sr2, method, CellSize, "#", "#", sr1)
+    arcpy.ProjectRaster_management(ymap, yout, sr2, method, CellSize, "#", "#", sr1)
 
     # Test - extract by  mask
     xout2 = ExtractByMask(xout, OutRas)     # Added 8/2/2014
@@ -1262,7 +1331,7 @@ def create_lat_lon_rasters(arcpy, projdir, mosprj, wkt_text):
     printMessages(arcpy, ['        Latitude and Longitude grid generation completed without error.'])
     return xout2, yout2, xmap, ymap
 
-def build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, Arc_To_From, Arc_From_To, NodesLL, NodesXY, Lengths, Straglers, StrOrder, sr, gageDict=None):
+def build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, ToSeg, NodesLL, NodesXY, Lengths, Straglers, StrOrder, sr, gageDict=None, LakeDict=None):
     '''
     8/10/2017: This function is designed to build the routiing parameter netCDF file.
                 Ideally, this will be the only place the produces the file, and
@@ -1372,13 +1441,10 @@ def build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, Arc_To_From, Arc
     #drops = [NodeElev[fromnode]-NodeElev[tonode] for fromnode, tonode in zip(fromnodes, tonodes)]
     drops = [x if x > 0 else 0 for x in drops]                                                # Replace negative values with 0
 
-    # Set variable value arrays
-    fromlist = [Arc_To_From[arcid] for arcid in order]                                      # List containes 'None' values, must convert to numpy.nan
-    tolist = [Arc_From_To[arcid] for arcid in order]                                        # List containes 'None' values, must convert to numpy.nan
-
     # Change None values to 0.  Could alternatively use numpy.nan
-    froms[:] = numpy.array([0 if not x else x for x in fromlist])                    # Note that the From in this case is the ARCID of any of the immediately upstream contributing segments
-    tos[:] = numpy.array([0 if not x else x for x in tolist])                        # Note that the To in this case is the ARCID of the immediately downstream segment
+    froms[:] = 0                                                                # Set to 0 because it doesn't really tell us anything
+    tolist = [ToSeg.get(arcid) for arcid in order]
+    tos[:] = numpy.array([0 if not x else x for x in tolist])                   # Note that the To in this case is the ARCID of the immediately downstream segment
 
     # Fill in other variables
     slons[:] = numpy.array([NodesLL[fromnode][0] for fromnode in fromnodes])
@@ -1392,7 +1458,7 @@ def build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, Arc_To_From, Arc
     order_ = [1 if arcid in Straglers else StrOrder[From_To[arcid][0]] for arcid in order]  # Deal with issue of some segments being assigned higher orders than they should.
     orders[:] = numpy.array(order_)
     Sos_ = numpy.round(numpy.array(drops).astype(float)/Lengthsnc[:], 3)        # Must convert list to float to result in floats
-    numpy.place(Sos_, Sos_ == 0, [0.005])                                         # Set minimum slope to be 0.005
+    numpy.place(Sos_, Sos_ == 0, [0.005])                                       # Set minimum slope to be 0.005
     Sos[:] = Sos_[:]
 
     # Set default arrays
@@ -1411,6 +1477,12 @@ def build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, Arc_To_From, Arc
     else:
         Gages[:, :] = numpy.asarray([tuple('               ') for arcid in order])    # asarray converts from tuple to array
     del gageDict
+
+    # Added 12/31/2019 by KMS to include reservoirs on reaches
+    if LakeDict is not None:
+        LakeDis[:] = numpy.array([LakeDict.get(arcid, NoDataVal) for arcid in order])
+    else:
+        LakeDis[:] = NoDataVal
 
     # Close file
     rootgrp.close()
@@ -1436,10 +1508,10 @@ def assign_lake_IDs(arcpy, in_lakes, lakeIDfield=None):
     else:
         printMessages(arcpy, ['    Using provided lake ID field: {0}'.format(lakeIDfield)])
         lakeID = lakeIDfield                                                    # Use existing field specified by 'lakeIDfield' parameter
-    printMessages(arcpy, ['  Checked lake input shapefile for unique ID in {0: 3.2f} seconds.'.format(time.time()-tic1)])
+    printMessages(arcpy, ['    Checked lake input shapefile for unique ID in {0: 3.2f} seconds.'.format(time.time()-tic1)])
     return lakeID
 
-def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, FLID, in_raster):
+def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, in_raster):
     '''
     8/7/2017: This function will add lakes to an NCAR Reach-based routing configuration.
 
@@ -1464,29 +1536,145 @@ def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, FLID, i
     arcpy.CopyFeatures_management(WB, outshp)
     lakeID = assign_lake_IDs(arcpy, outshp, lakeIDfield=defaultLakeID)
 
-    # Set some initial globals for the Lake Preprocessing steps
-    WBFields = (FLID, lakeID)                                                  # If FC is NHDPlus-derived
-    LK_Routing.FLID = FLID                                                      # Try replacing a global value in other script
-    LK_Routing.save_Lake_Link_Type_arr = True                                  # Tell the script not to save the lake link type array since we will save it in this script
-    LK_Routing.LakeAssoc = lakeID
-
     #arcpy.AddField_management(FL, lakeID, "SHORT")
-    dtypes = numpy.dtype([(FLID, 'i4'), (LK_Routing.hydroSeq, 'i4')])           # Create a numpy dtype object
+    dtypes = numpy.dtype([(FLID, 'i4'), (hydroSeq, 'i4')])           # Create a numpy dtype object
     FLarr = numpy.empty(len(sorted_Flowlinearr), dtype=dtypes)
     FLarr[FLID] = sorted_Flowlinearr
 
     # Reverse this range since the sorted array is sorted from uptream to downstream.
-    FLarr[LK_Routing.hydroSeq] = numpy.arange(len(sorted_Flowlinearr))[::-1]
+    FLarr[hydroSeq] = numpy.arange(len(sorted_Flowlinearr))[::-1]
 
-    # Runt he main lake pre-processor
-    WaterbodyDict, Lake_Link_Type_arr, Old_New_LakeComID = LK_Routing.main(arcpy,
-        outDir, FL, outshp, ToSeg, FLarr, WBFields, Subset_arr=None, NJ=True)
-    print('    size of lake link type array: %s' %Lake_Link_Type_arr.shape[0])
-    print('    size of waterbody dict: %s' %len(WaterbodyDict))
+    # Run the main lake pre-processor
+    WaterbodyDict, Lake_Link_Type_arr, Old_New_LakeComID = LK_main(arcpy,
+        outDir,
+        FL,
+        outshp,
+        ToSeg,
+        FLarr,
+        (FLID, lakeID),
+        Subset_arr=None,
+        NJ=True,
+        LakeAssociation=lakeID)
+
+    # Select only the lakes that have been pre-processed onto the routing network
+    counter = 0
+    outWBs = list(set(WaterbodyDict.values()))
+    with arcpy.da.UpdateCursor(outshp, lakeID) as cursor:
+        for row in cursor:
+            if row[0] not in outWBs:
+                cursor.deleteRow()
+                counter += 1
+
+    # Output feature class representing the lakes after lake pre-processing
+    Lakes = list(set(WaterbodyDict.values()))                                 # List of lakes to keep in output lakes polyogn feature class
+    build_lake_FC(arcpy, outshp, Old_New_LakeComID, Lake_List=Lakes, LkID=lakeID)
+
+    printMessages(arcpy, ['    size of lake link type array: {0}'.format(Lake_Link_Type_arr.shape[0])])
+    printMessages(arcpy, ['    size of waterbody dict: {0}'.format(len(WaterbodyDict))])
     del Old_New_LakeComID
-
     printMessages(arcpy, ['    Lakes added to reach-based routing files after {0: 3.2f} seconds.'.format(time.time()-tic1)])
     return WaterbodyDict, Lake_Link_Type_arr
+
+def Add_Param_data_to_FC(arcpy, inNC, inFC, FCIDfield='arcid', NCIDfield='link', addFields=[]):
+    '''
+    Add fields to a feature class from a RouteLink or LAKEPARM table. This function
+    will always add or update existing fields in the input feature class. If the
+    format of the input RouteLink or LAKEPARM files change, then the "fields"
+    dictionary in this function will need to be updated.
+    '''
+    tic1 = time.time()
+    printMessages(arcpy, ['    Adding parameters from {0} to {1}.'.format(os.path.basename(inNC), os.path.basename(inFC))])
+
+    # Field information. FC field name: [NC variable name, ArcGIS field type, numpy dtype]
+    fields = {'link': ['link', 'LONG', 'i8'],
+                'from': ['from', 'LONG', 'i8'],
+                'to': ['to', 'LONG', 'i8'],
+                'lon': ['lon', 'FLOAT', 'f4'],
+                'lat': ['lat', 'FLOAT', 'f4'],
+                'alt': ['alt', 'FLOAT', 'f4'],
+                'order_': ['order', 'SHORT', 'i4'],
+                'Qi': ['Qi', 'FLOAT', 'f4'],
+                'MusK': ['MusK', 'FLOAT', 'f4'],
+                'MusX': ['MusX', 'FLOAT', 'f4'],
+                'Length': ['Length', 'FLOAT', 'f4'],
+                'n': ['n', 'FLOAT', 'f4'],
+                'So': ['So', 'FLOAT', 'f4'],
+                'ChSlp': ['ChSlp', 'FLOAT', 'f4'],
+                'BtmWdth': ['BtmWdth', 'FLOAT', 'f4'],
+                'x': ['x', 'FLOAT', 'f4'],
+                'y': ['y', 'FLOAT', 'f4'],
+                'Kchan': ['Kchan', 'SHORT', 'i4'],
+                'Lake': ['NHDWaterbodyComID', 'LONG', 'i4'],
+                'gages': ['gages', 'TEXT', '|S15'],
+                'Lake': ['NHDWaterbodyComID', 'LONG', 'i4'],
+                'lake_id': ['lake_id', 'LONG', 'i8'],
+                'LkArea': ['LkArea', 'FLOAT', 'f4'],
+                'LkMxE': ['LkMxE', 'FLOAT', 'f4'],
+                'WeirC': ['WeirC', 'FLOAT', 'f4'],
+                'WeirL': ['WeirL', 'FLOAT', 'f4'],
+                'OrificeC': ['OrificeC', 'FLOAT', 'f4'],
+                'OrificeA': ['OrificeA', 'FLOAT', 'f4'],
+                'OrificeE': ['OrificeE', 'FLOAT', 'f4'],
+                'WeirE': ['WeirE', 'FLOAT', 'f4'],
+                'ascendingIndex': ['ascendingIndex', 'SHORT', 'i4'],
+                'ifd': ['ifd', 'FLOAT', 'f4']}
+
+    # Function options
+    dimName = 'feature_id'                                                      # input netCDF dimension name
+    rootgrp = netCDF4.Dataset(inNC, 'r')                                        # Initiate read object on the input netCDF file
+    ncCount = len(rootgrp.dimensions[dimName])                                  # Get lenght of variable
+    ncVars = [varName for varName,ncvar in rootgrp.variables.items() if dimName in ncvar.dimensions]    # Get all variables on this dimension
+
+    # Read input feature class for field names
+    inFields = [field.name for field in arcpy.ListFields(inFC)]
+    inFields_lower = [field.lower() for field in inFields]                      # Go to lower case
+    #FeatCount = arcpy.GetCount_management(inFC).getOutput(0)                   # Count the features in the input feature class
+
+    # Add fields to input feature class, if requested
+    for addField in addFields:
+        if addField in fields:
+            atts = fields[addField]
+            field_lower = addField.lower()                                         # Go to lower case
+            dtype = atts[1]
+            if field_lower not in inFields_lower:
+                arcpy.AddField_management(inFC, addField, dtype)
+                #printMessages(arcpy, ['      Added field {0}'.format(addField)])
+            else:
+                #printMessages(arcpy, ['      Field "{0}" already in input feature class.'.format(addField)])
+                pass
+
+    # Generate numpy structured array to store data
+    ncID = fields[NCIDfield]
+    dtypes = [(ncID[0], ncID[2])] + [(field, fields.get(field)[2]) for field in addFields if field!=NCIDfield]
+    RL_arr = numpy.empty(ncCount, dtype=dtypes)
+    RL_arr[NCIDfield] = rootgrp.variables[NCIDfield][:]
+    for field in addFields:
+        fieldinfo = fields.get(field)
+        ncvarname = fieldinfo[0]
+        if ncvarname == 'gages':
+            tempArr = rootgrp.variables[ncvarname][:]
+            RL_arr[field] = numpy.array([item.tostring() for item in tempArr]).astype(str)
+            del tempArr
+        else:
+            RL_arr[field] = rootgrp.variables[ncvarname][:]
+   # printMessages(arcpy, ['      Built structured array after {0:3.2f} seconds.'.format(time.time()-tic1)])
+
+    # Iterate over features in the input Feature Class and populate values
+    updateFields = [FCIDfield] + [varName for varName in addFields]
+    counter= 0
+    tic2 = time.time()
+    with arcpy.da.UpdateCursor(inFC, updateFields) as cursor:
+        for row in cursor:
+            ID = row[0]
+            item = RL_arr[RL_arr[NCIDfield]==ID]
+            newRow = [ID] + [item[varName][0] for varName in addFields]
+            cursor.updateRow(newRow)
+            counter += 1
+            if counter % 10000 == 0:
+                #printMessages(arcpy, ['      {0} records processed in {1:3.2f} seconds.'.format(counter, time.time()-tic2)])
+                tic2 = time.time()
+    #printMessages(arcpy, ['    Time elapsed for writing paramters to feature class: {0:3.2f} seconds.'.format(time.time()-tic1)])
+    printMessages(arcpy, ['    Wrote paramters to feature class: {0:3.2f} seconds.'.format(time.time()-tic1)])
 
 def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=None, Lakes=None):
     """If "Create reach-based routing files?" is selected, this function will create
@@ -1554,12 +1742,12 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
     arcpy.env.outputCoordinateSystem = sr2
 
     # Output files
-    outStreams = os.path.join(projdir, StreamSHP)
-    RoutingNC = os.path.join(projdir, RT_nc)
-    OutFC = os.path.join("in_memory", "Nodes")
-    OutFC2 = os.path.join("in_memory", "NodeElev")
-    OutFC3 = os.path.join("in_memory", "NodeOrder")
-    outRaster = os.path.join("in_memory", "LINKID")
+    outStreams = os.path.join(projdir, StreamSHP)                               # The output stream shapefile, to be kept with routing stack
+    RoutingNC = os.path.join(projdir, RT_nc)                                    # The output RouteLink netCDF file, to be kept with routing stack
+    OutFC = os.path.join("in_memory", "Nodes")                                  # Temporary node-based network file
+    OutFC2 = os.path.join("in_memory", "NodeElev")                              # Temporary node-based elevation file extracted from DEM
+    OutFC3 = os.path.join("in_memory", "NodeOrder")                             # Temporary node-based stream order file, extracted form stream order grid
+    outRaster = os.path.join("in_memory", "LINKID")                             # Temporary node-based LINKID file, extracted from LINKID grid
 
     # Build Stream Features shapefile
     StreamToFeature(channelgrid, fdir, outStreams, "NO_SIMPLIFY")
@@ -1728,13 +1916,38 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
             cursor.updateRow(row)
     arcpy.DeleteField_management(outStreams, ['FROM_NODE', 'TO_NODE'])          # Delete node-based fields
 
+    ToSeg = {Arc_To_From[arcid]:Arc_From_To[arcid] for arcid in order}
+
     # Make call to Lake module
     if Lakes is not None:
-        ToSeg = {arcid:From_To[arcid][1] for arcid in order}
-        reaches_with_lakes(arcpy, outStreams, Lakes, projdir, ToSeg, order, "ARCID", channelgrid)
+        WaterbodyDict, Lake_Link_Type_arr = reaches_with_lakes(arcpy,
+                                                                outStreams,
+                                                                Lakes,
+                                                                projdir,
+                                                                ToSeg,
+                                                                order,
+                                                                channelgrid)
+        del Lake_Link_Type_arr
+    else:
+        WaterbodyDict = None
 
     # Call function to build the netCDF parameter table
-    build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, Arc_To_From, Arc_From_To, NodesLL, NodesXY, Lengths, Straglers, StrOrder, sr1, gageDict=frxst_linkID)
+    build_RouteLink(arcpy,
+                    RoutingNC,
+                    order,
+                    From_To,
+                    NodeElev,
+                    ToSeg,
+                    NodesLL,
+                    NodesXY,
+                    Lengths,
+                    Straglers,
+                    StrOrder,
+                    sr1,
+                    gageDict=frxst_linkID,
+                    LakeDict=WaterbodyDict)
+
+    Add_Param_data_to_FC(arcpy, RoutingNC, outStreams, FCIDfield='arcid', NCIDfield='link', addFields=Streams_addFields)
     del frxst_linkID, sr1
     return outRaster
 
@@ -1745,11 +1958,6 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
                 all functions wishing to write the file will reference this function.
     '''
     min_elev_keys = list(min_elevs.keys())                                      # 5/31/2019: Supporting Python3
-
-
-    # Create Lake parameter file
-    printMessages(arcpy, ['    Starting to create lake parameter table.'])
-    printMessages(arcpy, ['        Lakes Table: %s Lakes' %len(list(areas.keys()))])
 
     # Create NetCDF output table
     rootgrp = netCDF4.Dataset(LakeNC, 'w', format=outNCType)
@@ -1842,7 +2050,6 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     return
 
 def build_LAKEPARM_ascii(LakeTBL, min_elevs, areas, max_elevs, OrificEs, cen_lats, cen_lons, WeirH_vals):
-
     '''
     Function to build LAKEPARM.TBL ascii-format file.
     Not currently called from any other function.
@@ -1861,7 +2068,49 @@ def build_LAKEPARM_ascii(LakeTBL, min_elevs, areas, max_elevs, OrificEs, cen_lat
             WeirH = WeirH_vals[lkid]
             a.writerow([lkid, lkarea, lkmaxelev, WeirC, WeirL, OrificeC, OrificA, OrificeE, cen_lat, cen_lon, ifd_Val, WeirH])   #COMID?
 
-def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield=None):
+# Function specifically for building a lake feature class
+def build_lake_FC(arcpy, Waterbody, Old_New_LakeComID, Lake_List=[], LkID=defaultLakeID):
+    '''
+    This function will bild a feature class of lakes, which may have been pre-processed
+    using the lake pre-processing functions. A dictionary is required that will
+    provide any lake ID re-mapping.
+    '''
+
+    tic1 = time.time()
+    InLakes = os.path.join('in_memory', 'TempLakes')                          # Output subsetted/merged lake dataset
+
+    # Get a list of all of the lake IDs in the input lake feature class
+    lake_arr = arcpy.da.FeatureClassToNumPyArray(Waterbody, (LkID))
+    inLakeList = lake_arr[LkID].tolist()
+    del lake_arr
+
+    # Check if there was any merging of the lakes
+    origIDs = Old_New_LakeComID.keys()                                          # Isolate list of unique original lake IDs
+    newIDs = Old_New_LakeComID.values()                                         # Isolate list of unique new lake IDs
+    if origIDs.sort == newIDs.sort and inLakeList.sort == Lake_List.sort:
+        printMessages(arcpy, ['    The lists are identical. No need to create a new lake feature class.'])
+    else:
+        printMessages(arcpy, ['    There were changes made to the input lakes. Writing feature class of merged lakes.'])
+        arcpy.CopyFeatures_management(Waterbody, InLakes)
+        with arcpy.da.UpdateCursor(InLakes, (LkID)) as cursor:
+            for row in cursor:
+                Lake = row[0]
+                if Lake in Old_New_LakeComID:
+                    Lake = Old_New_LakeComID.get(Lake)
+                if Lake not in Lake_List:
+                    cursor.deleteRow()                                          # Delete this feature
+                else:
+                    row[0] = Lake
+                    cursor.updateRow(row)
+
+    if origIDs.sort != newIDs.sort:
+        # Dissolve to get new lake polygons
+        arcpy.Delete_management(Waterbody)                                      # Delete the existing layer in order to replace it
+        arcpy.Dissolve_management(InLakes, Waterbody, LkID)                     # Dissolve the layer based on the lake ID. May create multipart features
+        arcpy.Delete_management(InLakes)                                        # Delete temporary layer
+        printMessages(arcpy, ['    Created merged lake feature class: {0}'.format(Waterbody)])
+
+def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield=None, Gridded=True):
     """
     This function is intended to add reservoirs into the model grid stack, such
     that the channelgrid and lake grids are modified to accomodate reservoirs and
@@ -1880,6 +2129,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
 
     tic1 = time.time()                                                          # Set timer
     printMessages(arcpy, ['  Adding reservoirs to routing stack.'])
+    subsetLakes = True                                                          # Option to eliminate lakes that do not intersect channel network
 
     # Get information about the input domain and set environments
     arcpy.env.cellSize = cellsize
@@ -1887,9 +2137,11 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
     arcpy.env.outputCoordinateSystem = sr2
     arcpy.env.snapRaster = channelgrid
 
-    # Use extent of channelgrid raster to add a feature layer of lake polygons
-    # If reach-based routing (with lakes) is selected, this shapefile may have already been created
-    outshp = os.path.join(projdir, TempLakeFIle)
+    # Temporary and permanent output files
+    outshp = os.path.join(projdir, TempLakeFIle)                                # If reach-based routing (with lakes) is selected, this shapefile may have already been created
+    outRastername = os.path.join(projdir, "Lakesras")
+    outfeatures = os.path.join(projdir, LakesShp)
+
     if not os.path.exists(outshp):
         arcpy.CopyFeatures_management(in_lakes, outshp)
         lakeID = assign_lake_IDs(arcpy, outshp, lakeIDfield=lakeIDfield)
@@ -1903,16 +2155,45 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
         arcpy.CalculateField_management(outshp, Field1, '!shape.area@squarekilometers!', "PYTHON_9.3")
     arcpy.MakeFeatureLayer_management(outshp, "Lakeslyr")
 
-    # Gather areas from AREASQKM field (2/23/2018 altered in order to provide non-gridded areas)
-    areas = {row[0]: row[1]*1000000 for row in arcpy.da.SearchCursor("Lakeslyr", [lakeID, Field1])}     # Convert to square meters
-    lakeIDList = list(areas.keys())                                             # 2/23/2018: Added to find which lakes go missing after resolving on the grid
-
     # Create a raster from the lake polygons that matches the channelgrid layer
-    outRastername = os.path.join(projdir, "Lakesras")
-    outfeatures = os.path.join(projdir, LakesShp)
     arcpy.CopyFeatures_management("Lakeslyr", outfeatures)
     arcpy.PolygonToRaster_conversion(outfeatures, lakeID, outRastername, "MAXIMUM_AREA")    # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
     #arcpy.FeatureToRaster_conversion(outfeatures, lakeID, outRastername)       # This tool requires only ArcGIS for Desktop Basic, but does not allow a priority field
+
+    # Code-block to eliminate lakes that do not coincide with active channel cells
+    strm_arr = arcpy.RasterToNumPyArray(channelgrid)                            # Read channel grid array
+    Lake_arr = arcpy.RasterToNumPyArray(outRastername)                          # Read lake grid array
+    lake_uniques = numpy.unique(Lake_arr[Lake_arr!=NoDataVal])
+    if Gridded and subsetLakes:
+        Lk_chan = {lake:strm_arr[numpy.logical_and(Lake_arr==lake, strm_arr==0)].shape[0]>0 for lake in lake_uniques}   # So slow...
+        old_Lk_count = lake_uniques.shape[0]
+        lake_uniques = numpy.array([lake for lake,val in Lk_chan.items() if val])   # New set of lakes to use
+        new_Lk_count = lake_uniques.shape[0]
+        Lake_arr[~numpy.array([item in lake_uniques for item in Lake_arr])] = NoDataVal    # Remove lakes from Lake Array that are not on channels. Could use Lake_arr[~numpy.isin(Lake_arr, lake_uniques)] for python3
+        del Lk_chan, old_Lk_count, new_Lk_count
+
+        # Reset the 1...n index and eliminate lakes from shapefile that were eliminated here
+        num = 0                                                                 # Initialize the lake ID counter
+        counter = 0
+        printMessages(arcpy, ['    Proceeding to eliminate lakes that are not connected to a channel pixel.'])
+        with arcpy.da.UpdateCursor(outfeatures, lakeID) as cursor:
+            for row in cursor:
+                if row[0] not in lake_uniques:
+                    cursor.deleteRow()
+                    counter += 1
+                else:
+                    num += 1
+                    row[0] = num
+                    cursor.updateRow(row)
+        printMessages(arcpy, ['    Found {0} lakes on active channels.'.format(num)])
+        printMessages(arcpy, ['    Eliminated {0} lakes because they were not connected to a channel pixel.'.format(counter)])
+        arcpy.Delete_management(outRastername)                                  # Delete it so that it can be recreated
+        arcpy.PolygonToRaster_conversion(outfeatures, lakeID, outRastername, "MAXIMUM_AREA")    # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
+
+    # Gather areas from AREASQKM field (2/23/2018 altered in order to provide non-gridded areas)
+    #areas = {row[0]: row[1]*1000000 for row in arcpy.da.SearchCursor("Lakeslyr", [lakeID, Field1])}     # Convert to square meters
+    areas = {row[0]: row[1]*1000000 for row in arcpy.da.SearchCursor(outfeatures, [lakeID, Field1])}     # Convert to square meters
+    lakeIDList = list(areas.keys())                                             # 2/23/2018: Added to find which lakes go missing after resolving on the grid
 
     # Hack to convert Lakesras to 16bit integer
     outRaster1 = (channelgrid * 0) + Raster(outRastername)                      # Create 16bit ratser for Lakesras out of channelgrid
@@ -1940,7 +2221,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
 
     # 2/23/2018: Find the missing lakes and sample elevation at their true centroid.
     min_elev_keys = list(min_elevs.keys())                                      # 5/31/2019: Supporting Python3
-    printMessages(arcpy, ['    Lakes in minimum elevation dict: {0}'.format(min_elev_keys)])
+    printMessages(arcpy, ['    Lakes in minimum elevation dict: {0}'.format(len(min_elev_keys))])
     MissingLks = [item for item in lakeIDList if item not in min_elev_keys]  # 2/23/2018: Find lakes that were not resolved on the grid
     shapes = {}
     if len(MissingLks) > 0:
@@ -1968,6 +2249,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
         noDepthFile = os.path.join(projdir, 'Lakes_with_minimum_depth.csv')
         with open(noDepthFile, 'wb') as f:
             w = csv.writer(f)
+            w.writerow([lakeID, "original_depth"])
             w.writerows(list(noDepthLks.items()))
             del noDepthFile
     del elevRange, noDepthLks
@@ -2020,12 +2302,12 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
 
     # Clean up by deletion
     printMessages(arcpy, ['    Lake parameter table created without error in {0:3.2f} seconds.'.format(time.time()-tic1)])
+    Add_Param_data_to_FC(arcpy, LakeNC, outfeatures, FCIDfield=lakeID, NCIDfield='lake_id', addFields=Lakes_addFields)
 
     # Clean up
     del sr1, point, outRaster1
     arcpy.Delete_management("Lakeslyr")
     arcpy.Delete_management(outshp)
-    #arcpy.Delete_management(outfeatures)
     arcpy.Delete_management('in_memory')
     arcpy.Delete_management(outRastername)
     del projdir, fill2, cellsize, sr2, in_lakes, lakeIDList, outRaster, channelgrid
@@ -2085,10 +2367,9 @@ def adjust_to_landmask(arcpy, in_raster, LANDMASK, sr2, projdir, inunits):
     printMessages(arcpy, ['    Topography corrected to match coarse grid LANDMASK.'])
     return mosprj2
 
-def build_GWBUCKPARM(arcpy, out_dir, cat_areas, cat_comids, tbl_type='.nc'):
+def build_GWBUCKPARM(arcpy, out_dir, cat_areas, cat_comids, tbl_type=out_1Dtype):
     '''
     5/17/2017: This function will build the groundwater bucket parameter table.
-               Currently, two output formats are available: netCDF or .TBL
     '''
     tic1 = time.time()
     Community = True                                                            # Switch to provide Community WRF-Hydro GWBUCKPARM outputs
@@ -2282,9 +2563,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
                 # Read Fulldom file variable to raster layer
                 for ncvarname in ['CHANNELGRID', 'FLOWDIRECTION']:
                     printMessages(arcpy, ['    Creating layer from netCDF variable {0}'.format(ncvarname)])
-                   # nc_raster = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables[ncvarname][:]), point, grid_obj.DX, grid_obj.DY)
                     nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables[ncvarname][:]))
-                    #arcpy.DefineProjection_management(nc_raster, sr)
                     nc_raster.save(os.path.join('in_memory', ncvarname))
                     arcpy.CalculateStatistics_management(nc_raster)
                     arcpy.env.snapRaster = nc_raster
@@ -2328,9 +2607,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
             else:
                 printMessages(arcpy, ['    LINKID exists in FullDom file.'])
                 for ncvarname in ['LINKID', 'FLOWDIRECTION']:
-                    #nc_raster = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables[ncvarname][:]), point, grid_obj.DX, grid_obj.DY)
                     nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables[ncvarname][:]))
-                    #arcpy.DefineProjection_management(nc_raster, sr)
                     nc_raster.save(os.path.join('in_memory', ncvarname))
                     arcpy.CalculateStatistics_management(nc_raster)
                     arcpy.env.snapRaster = nc_raster
@@ -2355,9 +2632,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
 
         elif in_method == 'Polygon Shapefile or Feature Class':
             printMessages(arcpy, ['    Polygon Shapefile input: {0}'.format(in_Polys)])
-            #nc_raster = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables['TOPOGRAPHY'][:]), point, grid_obj.DX, grid_obj.DY)
             nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables['TOPOGRAPHY'][:]))
-            #arcpy.DefineProjection_management(nc_raster, sr)
             arcpy.CalculateStatistics_management(nc_raster)
 
            # Gather projection and set output coordinate system
@@ -2389,7 +2664,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
     del arcpy, rootgrp1, tic1
     return GWBasns, GWBasns_arr
 
-def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, coarse_grid, tbl_type='.nc', Grid=True):
+def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, coarse_grid, tbl_type=out_1Dtype, Grid=True):
     '''
     5/17/2017: This function will build the groundwater bucket grids and parameter
                tables.
@@ -2509,6 +2784,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     arcpy.env.outputCoordinateSystem = sr2
     arcpy.env.workspace = projdir
     arcpy.env.scratchWorkspace = projdir
+    arcpy.env.parallelProcessingFactor = "100%"                                 # Use all of the cores on the machine for tools that respect this environment.
 
     # Process: Fill DEM
     fill = Fill(mosprj, z_limit)                                                # Sink-filling using z-limit (global)
@@ -2679,18 +2955,26 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
         printMessages(arcpy, ['    Process: CHANNELGRID written to output netCDF.'])
 
     else:
-        # Alter Channelgrid for reservoirs
-        fill2.save(os.path.join(projdir, 'fill2.tif'))                          # Added 6/4/2019 to keep ArcGIS 10.6.1 from crashing later on in the lake script
-        arcpy, channelgrid_arr, outRaster_arr = add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield)
-
         # Process: Output LAKEGRID
         outRaster_var = rootgrp.variables['LAKEGRID']
-        outRaster_var[:] = outRaster_arr
-        printMessages(arcpy, ['    Process: LAKEGRID written to output netCDF.'])
-
-        # Process: Output Channelgrid
         channelgrid_var = rootgrp.variables['CHANNELGRID']
-        channelgrid_var[:] = channelgrid_arr
+
+        # Alter Channelgrid for reservoirs
+        fill2.save(os.path.join(projdir, 'fill2.tif'))                          # Added 6/4/2019 to keep ArcGIS 10.6.1 from crashing later on in the lake script
+
+        if routing:
+            outRaster_var[:] = constraster_arr
+            channelgrid_arr = arcpy.RasterToNumPyArray(channelgrid)
+            channelgrid_var[:] = channelgrid_arr
+            arcpy, channelgrid_arr, outRaster_arr = add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield, Gridded=False)
+        else:
+            arcpy, channelgrid_arr, outRaster_arr = add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield, Gridded=True)
+            outRaster_var[:] = outRaster_arr
+
+            # Process: Output Channelgrid
+            channelgrid_var[:] = channelgrid_arr
+        del channelgrid_arr, outRaster_arr
+        printMessages(arcpy, ['    Process: LAKEGRID written to output netCDF.'])
         printMessages(arcpy, ['    Process: CHANNELGRID written to output netCDF.'])
 
     # Clean up
@@ -2700,9 +2984,658 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
     arcpy.Delete_management(mosprj)
     arcpy.Delete_management('mosaicprj')
     arcpy.Delete_management('in_memory')
-    del constraster, fdir, flac, strm, channelgrid, fill2, channelgrid_arr, constraster_arr, fill
+    del constraster, fdir, flac, strm, channelgrid, fill2, constraster_arr, fill
     printMessages(arcpy, ['    Step 4 completed without error.'])
     return rootgrp
+
+def group_min(l, g):
+    '''Function for gathering minimum value from a set of groups'''
+    groups = collections.defaultdict(int)
+    for li, gi in izip(l, g):
+        if li <= groups[gi] or groups[gi]==0:
+            groups[gi] = li
+    return groups
+
+def Waterbody_SpatialJoin(arcpy, Flowline, Waterbody, fields, NJ=True, outDir=None, MO="HAVE_THEIR_CENTER_IN"):
+    '''This function performs a simple intersection between the flowline network
+    and the waterbodies. The output is a dictionary of waterbodies touched by
+    each flowline.
+
+    If optional parameter NJ is True, the spatial join will be performed. If False,
+    the Waterbody is assumed to be the already-joined flowlines to waterbodies
+    feature class.'''
+
+    tic1 = time.time()
+    printMessages(arcpy, ['        Fields requested: {0}, {1}'.format(fields[0], fields[1])])
+    if NJ:
+        printMessages(arcpy, ['        Starting to Intersect flowline network with waterbodies.'])
+        if not outDir:
+            OutFC = 'in_memory/IntersectFC'
+        else:
+            OutFC = os.path.join(outDir, 'IntersectFC.shp')
+
+         # The Spatial Join method used below will create duplicate records of the Flowlines if more than one Waterbody is intersected by that flowline
+        # Other match options: ["WITHIN","INTERSECT", "HAVE_THEIR_CENTER_IN"]
+        arcpy.SpatialJoin_analysis(target_features=Flowline, join_features=Waterbody, out_feature_class=OutFC, join_operation="JOIN_ONE_TO_MANY", join_type="KEEP_COMMON", match_option=MO)
+        intersectarr = arcpy.da.FeatureClassToNumPyArray(OutFC, fields)
+        arcpy.Delete_management(OutFC)
+    else:
+        printMessages(arcpy, ['        Using previously intersected feature class of flowlines to waterbodies: {0}.'.format(Waterbody)])
+        intersectarr = arcpy.da.FeatureClassToNumPyArray(Waterbody, fields)
+
+        # Remove elements where there is no flowline:lake association (mirroring the "KEEP_COMMON" option in the Spatial Join step above).
+        intersectarr = intersectarr[intersectarr[fields[-1]]!=LkNodata]
+
+    # Populate dictionary of all flowline/lake intersections
+    WaterbodyDict = {}
+    print(intersectarr)
+    for x in intersectarr:
+        try:
+            WaterbodyDict[x[fields[0]]] += [x[fields[1]]]
+        except KeyError:
+            WaterbodyDict[x[fields[0]]] = [x[fields[1]]]
+    del intersectarr
+
+    printMessages(arcpy, ['        Size of Dictionary: {0} flowlines comprising {1} lake intersections'.format(len(WaterbodyDict), sum([len(WaterbodyDict[i]) for i in WaterbodyDict]))])
+    printMessages(arcpy, ['        Found {0} flowlines with connectivity to lakes.'.format(len(WaterbodyDict))])
+    if NJ:
+        printMessages(arcpy, ['        Finished intersecting flowline network with waterbodies in {0:3.2f}s'.format(time.time()-tic1)])
+    else:
+        printMessages(arcpy, ['        Finished using previously intersected feature class to determine flowline-to-waterbody associations in {0: 3.2f}s'.format(time.time()-tic1)])
+    return WaterbodyDict
+
+def set_problem(problem_lakes, LakeID, problemstr):
+    '''This function is used to add elements to a dictionary where the values are
+    a list and the keys may or may not exist. This speeds up adding elements to
+    an existing dictionary.'''
+    try:
+        problem_lakes[LakeID] += [problemstr]
+    except KeyError:
+        problem_lakes[LakeID] = [problemstr]
+    return problem_lakes
+
+def get_inflow_segs(FLWBarr, localLk, FromComIDs, FromSegs, LakeAssociation=LakeAssoc):
+    '''This function will list all inflow segments to a particular lake.
+    Inputs:
+        1) FLWBarr: Array containing flowlines and the associated lake
+        2) localLk: The ID of the lake to examine
+        3) FromComIDs: Dictionary of the From:To relationship for flowlines
+        4) FromSegs: Dictionary of the upstream links for each flowline
+    Globals:
+        1) LakeAssociation: The field name used to associate flowlines with lakes.
+    Output:
+        inflows: Array of links that are inflows to the lake
+    '''
+
+    Lake_Links = FLWBarr[FLWBarr[LakeAssociation]==localLk]                           # Find all of the links inside the lake
+
+    # Find all headwater segments as start points
+    ToSeg_keys = Lake_Links[FLID]                                               # Array of all lake links for this local lake
+    ToSeg_vals = numpy.array([FromComIDs.get(key) for key in ToSeg_keys])       # Array of all downstream links for all of the lake links
+    ups = ToSeg_keys[~numpy.in1d(ToSeg_keys, ToSeg_vals)].tolist()              # List of all 'headwater' segments for this lake
+    del ToSeg_keys, ToSeg_vals, Lake_Links
+
+    # Gather all inflow segments from lake 'headwater' segments
+    inflows = [FromSegs[up] for up in ups if up in FromSegs]                    # list of all contributing segments to the headwater segments for this lake
+    inflows = numpy.array([item for sublist in inflows for item in sublist])    # Convert from list of lists to flat list
+    del ups
+    return inflows
+
+def check_downstream(uplink, localLk, FromComIDs, Lake_LinkDict):
+    '''This function will keep looking downstream to see if the link will flow
+    back into the same lake and will stop if it encounteres a different lake.
+    Inputs:
+        1) uplink: ID of the flowline to examine
+        2) localLk: ID of the lake under examination
+        3) FromComIDs: Dictionary of the From:To relationship for flowlines.
+        4) Lake_LinkDict: Dictionary of the Flowline:Lake relationships.
+    Outputs:
+        result: Boolean (True/False) of if there is a flow loop
+        downlinks: List of links to re-associate with this lake
+        counter: Number of flowlines downstream iterated over to find the loop
+        '''
+
+    # Setup initial values
+    result = False                                                              # Default condition
+    counter = 0                                                                 # Initiate counter
+    downlinks = [uplink]                                                        # Initiate list of links including supplied link
+    while not result:
+        counter += 1                                                            # Advance the counter
+        down = FromComIDs.get(uplink)                                           # Move down one segment
+        if down in NoDownstream:
+            break                                                               # Reached end of flow network. Break without returning True
+        else:
+            downlinks.append(down)                                              # Add this link to the list
+            if down in Lake_LinkDict:
+                if Lake_LinkDict.get(down) == localLk:                          # This means that the links flows eventually back into the same lake
+                    result = True
+                    break
+                else:
+                    break                                                       # Link is associated with another lake. Break without returning true.
+        uplink=down                                                             # Make this segment the upstream segment
+    #print '      Looked downstream %s links from %s in lake %s.' %(counter, uplink, localLk)
+    return result, downlinks, counter
+
+def get_lake_routing_info(FLWBarr, localLk, Lake_LinkDict, accum_val, FromComIDs, FromSegs, LakeAssociation=LakeAssoc):
+    '''This function will list all inflow segments to a "lake" as well as additional
+    datasets to assist in routing through the lake.
+
+    Inputs:
+        1) FLWBarr: Array containing flowlines and the associated lake
+        2) localLk: The ID of the lake to be examined
+        3) Lake_LinkDict: Dictionary of all link:lake associations in the domain (pass through to check_downstream function)
+        4) accum_val: The value given to each segment before performing lake routed accumulations
+        5) FromComIDs: Dictionary of the From:To relationship for flowlines
+        6) FromSegs: Dictionary of the upstream links for each flowline
+    Globals:
+        1) LakeAssociation: A field describing which lake ComID a flowline is associated with
+        2) FLID: The flowline ComID
+    Outputs:
+        1) Lake_LinksList: List of lake link ComIDs
+        2) inflows: list of all contributing segments to the headwater segments for this lake
+        3) SegVals: A dictionary initializing the accumulation of flow for each link in this lake
+        4) SegVals2: A dictionary initializing the accumulation of flow for each link in this lake. This dict is used to find the outlet.
+        5) ups: List of all 'headwater' segments for this lake
+        6) newLakeLinks: Dictionary to store newly found flowline:lake associations
+
+    If UseAll == True, the script will look outside of the link:lake associations
+    to find segments that may exit the lake and then re-enter. If the flow re-enters
+    the lake, it will include those segments.
+
+    Input array FLWBarr must have fields [LakeAssociation, FLID], as defined in global variables.
+    '''
+
+    # Local variables
+    UseAll = True                                                               # Switch to look outside of just the links that spatially intersect the lake
+
+    # Use all links that are associated with lakes (either through spatial join or attribute join)
+    Lake_Links = FLWBarr[FLWBarr[LakeAssociation]==localLk]                           # Find all of the links associated with the current lake
+    Lake_LinksList = Lake_Links[FLID].tolist()                                  # List of lake link ComIDs
+
+    # Find all headwater segments as start points
+    ToSeg_keys = numpy.unique(Lake_Links[FLID])                                 # Array of all unique lake links for this local lake
+    ToSeg_vals = numpy.unique(numpy.array([FromComIDs.get(key) for key in ToSeg_keys])) # Array of all unique downstream links for all of the lake links
+    ups = ToSeg_keys[~numpy.in1d(ToSeg_keys, ToSeg_vals)].tolist()              # List of all 'headwater' segments for this lake
+
+    # Find any non-assigned lake segments in the lake flow network by iterating down the network
+    newLakeLinks = {}                                                           # Dictionary to store new flowline:lake associations
+    counter = 0                                                                 # Initiate counter
+    seen = []                                                                   # Initiate list of seen links
+    if UseAll:
+
+        # Added 12/30/2019 to avoid situations with no upstream or downstream links
+        if len(ups) == 0:                                                       # I am not sure this will ever get triggered
+            changes = 0
+        else:
+            changes = 1                                                         # Initiate the change detector in order to move down the network in the first iteration
+
+        # Search down the network of links in this lake to find the outlet
+        iteration = 0                                                           # Initiate the iteration counter
+        while changes > 0:
+            downs = list(set([FromComIDs.get(key) for key in ups]))             # Get unique list of downstream flowline ComIDs
+
+            for key in downs:
+                if key in NoDownstream:                                         # Downstream segment is not a valid ComID
+                    # This might be where to catch an endorheic basin terminal lake
+                    downs.remove(key)
+
+            # Add any link:lake associations that were not already present. This is an attempt to eliminate flow looping out of lakes and back in.
+            checklinks = list(set([item for item in downs if item not in Lake_LinksList]))  # Unique list of links that are downstream of lake links but not associated with that lake
+
+            # Check these suspect links for downstream connectivity back to the lake
+            if len(checklinks) > 0:
+                for uplink in checklinks:
+                    if uplink in seen:
+                        continue
+                    result, downlinks, counter1 = check_downstream(uplink, localLk, FromComIDs, Lake_LinkDict)
+                    if result:
+                        # If result == True, then this lake flows out and then back into itself
+                        #print '      Looked downstream %s links from %s in lake %s.' %(counter1, uplink, localLk)
+                        Lake_LinksList += downlinks                             # Add these links to the lake association
+                        newLakeLinks.update({item:localLk for item in downlinks})   # Store these new flowline:lake associations
+                    else:
+                        # This downstream segment never returns to the lake. Disassociate.
+                        Lake_LinksList = [item for item in Lake_LinksList if item not in downlinks[1:]] # Remove these segments from association with this lake
+                    downs.remove(uplink)                                        # Remove this segment so that the loop can complete.
+                    seen.append(uplink)
+
+            downs = [item for item in downs if item in Lake_LinksList]          # Remove downstream segments that are not associated with this lake
+            #for key in downs:
+            #    if key in NoDownstream:
+            #        continue                                                    # Downstream segment is not a valid ComID
+            ups = downs                                                         # Change the upstream segments to examine in the next iteration to the downstream ones from the previous iteration
+            changes = sum([1 for item in downs if item is not None])            # Number of changes in this iteration
+            iteration += 1                                                      # Add one for each level
+        counter += 1                                                            # Advance the counter
+
+    Lake_LinksList = list(set(Lake_LinksList))                                  # Remove duplicate link IDs
+
+    # Set local accumulation values to default accum_val (1)
+    SegVals = {key:accum_val for key in Lake_LinksList}                         # Set all initial values to accum_val
+    SegVals2 = {key:accum_val for key in Lake_LinksList}                        # Set all initial values to accum_val
+
+    # Test to regenerate upstream inflows to account for newly added links (2/26/2018)
+    ToSeg_keys = numpy.array(Lake_LinksList)                                    # Array of all unique lake links for this local lake
+    ToSeg_vals = numpy.unique(numpy.array([FromComIDs.get(key) for key in ToSeg_keys])) # Array of all unique downstream links for all of the lake links
+
+    # Re-gather the upstream segments for this lake
+    ups = ToSeg_keys[~numpy.in1d(ToSeg_keys, ToSeg_vals)].tolist()              # List of all 'headwater' segments for this lake
+    del ToSeg_keys, ToSeg_vals                                                  # Free up memory
+
+    # Gather all inflow segments from lake 'headwater' segments. This may not account for oCONUS contributing links
+    #inflows = [FromSegs[up] for up in ups if up in FromSegs]                    # list of all contributing segments to the headwater segments for this lake
+    #inflows = numpy.unique(numpy.array([item for sublist in inflows for item in sublist]))  # Convert from list of lists to unique flat list
+
+    # 2/27/2018: We can more closely replicate WRF-Hydro's TYPE=3 segments if we say inflows are all segments that flow into any lake segment that are not already accounted for
+    inflows = []
+    for link in Lake_LinksList:
+        upsegs = FromSegs.get(link)                                             # All upstream segments for each lake link
+        if upsegs is None:
+            continue
+        upsegs2 = [item for item in upsegs if item not in Lake_LinksList]       # All contributing links that are not already associated with the lake
+        inflows += upsegs2
+        del upsegs, upsegs2
+    inflows = numpy.array(inflows)
+    return Lake_LinksList, inflows, SegVals, SegVals2, ups, newLakeLinks
+
+def Lake_Link_Type(arcpy, FLWBarr, FromComIDs, FLarr, subset=None, LakeAssociation=LakeAssoc):
+    '''
+    This function will assign a link type to each lake.
+            3 = Lake Inflow Link
+            2 = Internal Lake Link
+            1 = Lake Outflow Link (based on accumulated flow in the lake)
+
+    This function sorts the lakes by the minimum HydrSeq of all links associated
+    with that lake. Thus, theoretically, lakes can be visited by increasing HydroSeq
+    and no downstream searching for lakes should be necessary. ...
+
+    This function will examine each lake and determine the outlets based on an
+    accumulation of values through the topology of links within the lake. It will
+    identify lakes with (potentially) multiple outlets, as well as internally
+    draining lakes. Lakes with multiple outlets according to flow accumulation
+    within the lake will have the minor outlets removed.
+
+    2/16/2018: This function finally diagnoses all potential conflicts with WRF-Hydro.
+        In the "for LakeID in LakeSeq[FLID]:" loop, any continue statements will
+        eliminate that lake from being placed on the flow network. Conditions that
+        prevent a lake from functioning in WRF-Hydro are:
+            1) The lake has no Lake Link Type of 1 (outlet link). This seems to
+               occur when a lake has only one interior link, or when all interior
+               links flow directly to a nonexistent outlet link (endorheic).
+            2) A lake flows directly into another lake.
+            3) Multiple outlet links are defined
+    '''
+
+    printMessages(arcpy, ['        Starting to gather lake link type information.'])
+
+    # Options and defaults
+    tic1 = time.time()                                                          # Initiate timer for this function
+    #HydroSeq = False                                                            # Switch to use HydroSeq to find the lake outlet
+    IterateList = True                                                          # Switch to iterate over lake links to find outlet(s)
+    accum_val = 1                                                               # Values given to each segment before accumulation
+    debug = False                                                               # Switch to trigger many, many print statements
+
+    # Build default mapping files to store new lake mappings
+    problem_lakes = {}                                                          # Problem dictionary
+    Old_New_LakeComID = {}                                                      # Dictionary to store the 'old Lake ComID':'new Lake ComID' mapping
+    ChainedLakes = {}                                                           # Dictionary to store number of lakes chained together
+    Remove_Association = []                                                     # List used to remove a lake association from a flowline (for divergences in lakes)
+
+    # Set output array dtype and field names
+    dtype1 = dict(names=(FLID, 'LINK_TYPE', LakeAssociation, 'Accum1', 'Accum2'), formats=('<i4', '<i4', '<i4', '<i4', '<i4'))
+    dtype2 = dict(names=(FLID, 'LINK_TYPE', LakeAssociation, 'Accum1', 'Accum2', 'Reason'), formats=('<i4', '<i4', '<i4', '<i4', '<i4', '<i4'))
+
+    # Attempt to use lists instead of arrays
+    Lake_Link_Type_COMID = []                                                   # Flowline ComID for flowlines associated with lakes
+    Lake_Link_Type = []                                                         # The lake link type for this flowline
+    Lake_Link_Type_WBAREACOMI = []                                              # The lake ComID associated with this flowline
+    Lake_Link_Type_Accum1 = []                                                  # Added 2/17/2018 to keep track of lake local accumulation
+    Lake_Link_Type_Accum2 = []                                                  # Added 2/17/2018 to keep track of lake local accumulation
+
+    # Attempt to keep diagnostic information for lakes that are eliminated by this pre-processor
+    Tossed_Lake_Link_Type_arr = numpy.empty(0, dtype=dtype2)                    # Generate new empty array to store tossed lake values
+
+    # Build a dictionary here to pass into the get_lake_routing_info function
+    Lake_LinkDict = {item[FLID]:item[LakeAssociation] for item in FLWBarr}            # Generate dictionary of link:lake associations
+
+    # 1) Gather a list of all contributing segments for each segment in the system
+    tic2 = time.time()
+    FromSegs = {}
+    for key,val in FromComIDs.items():
+        try:
+            FromSegs[val] += [key]
+        except KeyError:
+            FromSegs[val] = [key]
+    printMessages(arcpy, ['        Completed FromSegs dictionary in {0:3.2f} seconds.'.format(time.time()-tic2)])
+
+    # 2) Create a sorting of lakes that will start with the lake which has the lowest HydroSeq value in it's flowlines
+    # Use indexing to grab elements common to both arrays while preserving order of one of the arrays (FLWBarr)
+    tic2 = time.time()
+    commons = FLarr[numpy.in1d(FLarr[FLID], FLWBarr[FLID])]                     # An array of all of the flowlines in the flowline array that are common to the flowline-waterbody association array
+    xsorted = numpy.argsort(commons[FLID])                                      # Find the sorted order for the array that is to be sorted
+    ypos = numpy.searchsorted(commons[xsorted][FLID], FLWBarr[numpy.in1d(FLWBarr[FLID], FLarr[FLID])][FLID]) # Search only the common values between arrays
+    indices = xsorted[ypos]
+    commons2 = commons[indices]                                                 # Re-order the input array to match the comparison array order
+    del commons, xsorted, ypos, indices
+
+    # Use the group_min function to find the minimum HydroSeq value for each group of WBAREACOMID values
+    group_minDict = group_min(commons2[hydroSeq], FLWBarr[LakeAssociation])         # Find the minimum HydroSeq value for this lake
+    del commons2                                                                # Free up memory
+
+    # Construct an array to store the Lake COMID and Minimum Hydrosequence
+    dtype = dict(names=(FLID, 'minHydroSeq'), formats=('<i4', '<f8'))
+    LakeSeq = numpy.array(group_minDict.items(), dtype=dtype)                   # Create array of minimum HydroSeq values for each lake
+    del group_minDict, dtype                                                    # Free up memory
+    LakeSeq = LakeSeq[LakeSeq[FLID]>-9998]                                      # Clip off -9999, -9998
+    LakeSeq.sort(order='minHydroSeq')                                           # Sort by minimum HydroSeq
+    LakeSeqsize = LakeSeq.shape[0]                                              # Get the number of elements in the array
+    printMessages(arcpy, ['        Completed sorting lakes by minimum HydroSeq in {0:3.2f} seconds.'.format(time.time()-tic2)])
+
+    # 3)  Find outflow link and assign type 1 (but not if it flows into another lake)
+    counter = 0                                                                 #
+    counter3 = 0                                                                # Counter to keep track of multiple outlet lakes
+    counter4 = 0                                                                # Counter to keep track of headwater lakes
+    counter5 = 0                                                                # Counter to keep track of terminal lakes
+    counter6 = 0                                                                # Counter to keep track of lakes immediately downstream
+    counter7 = 0                                                                # Counter to keep track of lakes with outlet that drians to nowhere
+    counter8 = 0                                                                # Counter to keep track of lakes with no Type=2 links
+    tic2 = time.time()                                                          # Reset the counter to provide progressive print statements
+    seen = []                                                                   # Lakes in this list have been 'seen', or reviewed
+    if subset is not None:
+        LakeSeq = LakeSeq[numpy.in1d(LakeSeq[FLID], subset[FLID])]              # Subset the list of lakes to a subset array if requested
+        printMessages(arcpy, ['        Subsetted the lakes from {0} to {1} based on a provided subset array.'.format(LakeSeqsize, LakeSeq.shape[0])])
+
+    for LakeID in LakeSeq[FLID]:
+        if LakeID in seen:
+            #printMessages(arcpy, ['          Lake {0} has already been examined.'.format(LakeID)])
+            continue                                                            # This lake has already been examined
+
+        # Get initial lake information, including adding looping outflows
+        Lake_LinksList, inflows, SegVals, SegVals2, ups, newLakeLinks = get_lake_routing_info(FLWBarr, LakeID, Lake_LinkDict, accum_val, FromComIDs, FromSegs, LakeAssociation=LakeAssociation)
+        if debug:
+            printMessages(arcpy, ['          Lake {0} has {1} links, {2} inflows, and {3} upstream flowlines.'.format(LakeID, len(Lake_LinksList), len(inflows), len(ups))])
+            printMessages(arcpy, ['          Lake {0} has {1} inflows: {2}'.format(LakeID, len(inflows), inflows)])
+            printMessages(arcpy, ['          Lake {0} has {1} links: {2}'.format(LakeID, len(Lake_LinksList), Lake_LinksList)])
+
+        # First, determine if this is a headwater lake. Must set 'continue statement to remove the lake
+        if len(inflows) == 0:
+            problem_lakes = set_problem(problem_lakes, LakeID, 'Headwater lake, no inflows')
+            counter4 += 1                                                       # Advance the counter
+            if debug:
+                printMessages(arcpy, ['        Headwater lake, no inflows'])
+
+        # See if any of the inflow links are on other lakes
+        counter2 = 0                                                            # Counter to keep track of lakes immediately upstream for each lake
+        num_uplakes = FLWBarr[numpy.in1d(FLWBarr[FLID], inflows)][LakeAssociation].tolist()   # This will be a list of lakes that are associated with this current lake's inflows
+        if LakeID in num_uplakes:                                               # Check to make sure lake doesn't flow into itself
+            # If the upstream lake is the same ID as the current lake, log the issue
+            num_uplakes.remove(LakeID)                                          # If it does, remove that lake to elminate a flow loop
+            problem_lakes = set_problem(problem_lakes, LakeID, 'Potential Flow Loop')
+            if debug:
+                printMessages(arcpy, ['        Potential Flow Loop'])
+        to_alter = list(num_uplakes)                                            # Copy the list to a new list
+
+        # If there are lakes immediately above this one, examine each one, then examine all lakes upstream of those, etc.
+        # This will essentially merge any lakes that flow directly into another lake, giving the ID of the most downstream lake to all chained lakes above it.
+        while len(num_uplakes) > 0:
+            uplake = num_uplakes[0]                                             # Look at the first lake in the list
+            if uplake in seen:                                                  # If this lake has already been examined, then skip it
+                num_uplakes.remove(uplake)                                      # If this lake has been examined, remove it from this list
+                continue
+            Old_New_LakeComID[uplake] = LakeID                                  # This will give the upstream lake the ID of the downstream lake it flows directly into
+            inflows2 = get_inflow_segs(FLWBarr, uplake, FromComIDs, FromSegs, LakeAssociation=LakeAssociation)   # Get all of the upstream lake's inflows and associate these flowlines with the new LakeID
+            uplakes2 = FLWBarr[numpy.in1d(FLWBarr[FLID], inflows2)][LakeAssociation].tolist() # Get all the upstream lakes for this lake
+            if uplake in uplakes2:
+                uplakes2.remove(uplake)                                         # Remove any flow loops
+            num_uplakes += uplakes2                                             # Add these new upstream lakes to the list of upstream lakes
+            to_alter += uplakes2
+            num_uplakes.remove(uplake)                                          # Remove this lake from the list so that iteration will stop when the list is empty
+            counter2 += 1                                                       # Advance the counter
+            seen.append(uplake)                                                 # Add this upstream lake to the list of examined lakes
+            del inflows2, uplakes2                                              # Free up memory
+
+        # Alter all Waterbody ComIDs at once to match the most downstream lake and regenerate lake information for the new, merged lake
+        if len(to_alter) > 0:
+            ChainedLakes[LakeID] = to_alter                                     # Add list of upstream lakes to this dictionary for this lake
+            printMessages(arcpy, ['        Altering {0} lake COMID value(s) to {1} from: {2}'.format(len(to_alter), LakeID, to_alter)])
+            for item in to_alter:
+                problem_lakes = set_problem(problem_lakes, LakeID, 'Upstream segment for {0} belongs to another lake [{1}]'.format(LakeID, item))
+            FLWBarr[LakeAssociation][numpy.in1d(FLWBarr[LakeAssociation], numpy.array(to_alter))] = LakeID  # Change all the IDs of the upstream lakes at once to the current lake ID
+            Lake_LinksList, inflows, SegVals, SegVals2, ups, newLakeLinks = get_lake_routing_info(FLWBarr, LakeID, Lake_LinkDict, accum_val, FromComIDs, FromSegs, LakeAssociation=LakeAssociation)
+        Lake_LinksList2 = Lake_LinksList + inflows.tolist()                     # Add all lake links to all inflows
+        if debug:
+            printMessages(arcpy, ['          Lake {0} now has {1} links: {2}'.format(LakeID, len(Lake_LinksList2), Lake_LinksList2)])
+
+        # Assign the initial LINK_TYPE values based on local lake links and inflow links
+        #Lake_Link_Type_local = [3 if item in inflows.tolist() and item not in newLakeLinks else 2 for item in Lake_LinksList2]   # Append Default LINK_TYPE (2) for all items in the Lake_LinksList
+        Lake_Link_Type_local = [3 if item in inflows.tolist() else 2 for item in Lake_LinksList2]   # Append Default LINK_TYPE (2) for all items in the Lake_LinksList
+
+
+        # Added 12/30/2019 to avoid situations with no upstream or downstream links
+        if len(ups) == 0:
+            changes = 0
+        else:
+            changes = 1                                                         # Initiate the change detector in order to move down the network in the first iteration
+
+        # For each lake, search down the network of links in this lake to find the outlet flowline(s)
+        iteration = 0                                                           # Initiate the iteration counter
+        while changes > 0:
+            downs = list(set([FromComIDs.get(key, 0) for key in ups]))             # Get unique list of downstream flowline ComIDs
+            downs = [item for item in downs if item in Lake_LinksList2]         # Remove downstream segments that are not associated with this lake
+            for key in downs:
+                if key in NoDownstream:
+                    # This might be where to catch an endorheic basin terminal lake
+                    # This appears to never get triggered, probably because there are no 0 values in Lake_LinksList2
+                    problem_lakes = set_problem(problem_lakes, LakeID, 'Drains to ocean or internally')
+                    if debug:
+                        printMessages(arcpy, ['        Link {0} drains to ocean or internally'.format(key)])
+                    counter5 += 1                                               # Advance the counter
+                else:
+                    # This downstream segment is a real flowline in the network
+                    ups_local = FromSegs[key]                                   # Get all the upstream links for this link
+                    vals = [SegVals.get(val) for val in ups_local if val in SegVals]    # Get the accumulated value for each upstream link (usually 1 for each upstream link)
+                    newval = 1 + sum(vals)                                      # Add one to the sum of the accumulated values of all upstream links
+                    SegVals[key] = newval                                       # Put the accumulated sum in the SegVals dictionary
+                    SegVals2[key] = newval                                      # Put the accumulated sum in the SegVals2 dictionary
+                    for up in ups_local:
+                        SegVals2[up] = 0                                        # Set all upstream values to 0 in the SegVals2 dictionary
+            ups = downs                                                         # Move down the network by one link
+            #changes = sum([1 for item in downs if item not in NoDownstream])    # Quantify the number of valid downstream links
+            changes = sum([0 if item in NoDownstream else 1 for item in downs])    # Quantify the number of valid downstream links
+            iteration += 1                                                      # Add one for each level
+        seen.append(LakeID)                                                     # Add this lake to the list of lakes that have been seen already
+        if debug:
+            printMessages(arcpy, ['        Lake_LinksList2: {0}'.format(Lake_LinksList2)])
+
+        # Record the routed and unrouted accumulation values
+        Accum1_local = [0 if item in inflows.tolist() else SegVals[item] for item in Lake_LinksList2]   # Added 2/17/2018 to keep track of lake local accumulation
+        Accum2_local = [0 if item in inflows.tolist() else SegVals2[item] for item in Lake_LinksList2]  # Added 2/17/2018 to keep track of lake local accumulation
+        if debug:
+            printMessages(arcpy, ['        Accum1_local: {0}'.format(Accum1_local)])
+            printMessages(arcpy, ['        Accum2_local: {0}'.format(Accum2_local)])
+
+        # Are there multiple outflows? If so, remove all networks contributing to minor outlets
+        # Note that this method only chooses the first link ID if multiple links have the same maximum accumulation value
+        maxflow = SegVals2.keys()[SegVals2.values().index(max(SegVals2.values()))]  # Find the flowline COMID with the highest accumulation value
+        outflows = [key for key,val in SegVals2.items() if val > 0]             # All links with accumulation still in them
+        if len(outflows) > 1:
+            problem_lakes = set_problem(problem_lakes, LakeID, 'Potentially multiple outlets. Secondary Outlets: {0}'.format(outflows))
+            if debug:
+                printMessages(arcpy, ['        Potentially multiple outlets. Secondary Outlets: {0}'.format(outflows)])
+
+            # Iterate upstream from the secondary outlet and remove associations.
+            non_outlets = [item for item in outflows if item != maxflow]        # Create list of secondary outlets (outlets with fewer contributing flowlines than the maxflow)
+            Remove_local = []                                                   # Initiate list of associations to remove
+            ups = non_outlets
+            while len(ups) > 0:
+                Remove_local += ups                                             # Add the segments from the secondary outlet to the association removal list
+                #ups = [FromSegs.get(key) for key in ups if key in Lake_LinksList2] # Move upstream in the flow network, only considering the local lake links
+                ups = [FromSegs.get(key) for key in ups if key in Lake_LinksList]   # Move upstream in the flow network, only considering the local lake links (not inflows links)
+                ups = [item for sublist in ups if sublist is not None for item in sublist]  # Flatten list including None values
+            counter3 += len(Remove_local)                                       # Iterate counter to keep track of lake association removals
+            Remove_Association += Remove_local                                  # Add these networks that drain to a secondary lake outlet to the association removal list
+
+            # Before eliminating this lake, save the information in a separate table
+            arrsize = Tossed_Lake_Link_Type_arr.shape[0]                        # Get current length of the array
+            maskList = numpy.array([True if item in Remove_local else False for item in Lake_LinksList2])   # Create a mask list to mask other lists with
+            Tossed_Lake_Link_Type_arr.resize(arrsize + maskList.sum(), refcheck=False)              # Add rows to the recarray to store new data
+            Tossed_Lake_Link_Type_arr[FLID][arrsize:] = numpy.array(Lake_LinksList2)[maskList]      # Add Lake_LinksList to the list
+            Tossed_Lake_Link_Type_arr['LINK_TYPE'][arrsize:] = numpy.array(Lake_Link_Type_local)[maskList] # Add Lake Link Types
+            Tossed_Lake_Link_Type_arr[LakeAssociation][arrsize:] = [LakeID for item in Remove_local]      # Add WBAREACOMI lake associations
+            Tossed_Lake_Link_Type_arr['Accum1'][arrsize:] = numpy.array(Accum1_local)[maskList]     # Added 2/17/2018 to keep track of lake local accumulation
+            Tossed_Lake_Link_Type_arr['Accum2'][arrsize:] = numpy.array(Accum2_local)[maskList]     # Added 2/17/2018 to keep track of lake local accumulation
+            Tossed_Lake_Link_Type_arr['Reason'][arrsize:] = 1                   # Reason: 'Potentially multiple outlets. Secondary Outlets: %s' %(outflows)
+
+            # Use a reverse the masklist to remove these minor network elements draining to false outlets from the rest of the data
+            Lake_LinksList2 = numpy.array(Lake_LinksList2)[~maskList].tolist()              # Subset the list to exclude the networks draining to a minor outlet
+            Lake_Link_Type_local = numpy.array(Lake_Link_Type_local)[~maskList].tolist()    # Subset the list to exclude the networks draining to a minor outlet
+            Accum1_local = numpy.array(Accum1_local)[~maskList].tolist()                    # Subset the list to exclude the networks draining to a minor outlet
+            Accum2_local = numpy.array(Accum2_local)[~maskList].tolist()                    # Subset the list to exclude the networks draining to a minor outlet
+
+        # Find if this has an outlet or not
+        if FromComIDs.get(maxflow) in NoDownstream:
+            # This is either a coastline waterbody or an internally draining (endorheic) lake
+            # If these lakes are not given any type=1 outlet links, the lake will not be placed into RouteLink
+            problem_lakes = set_problem(problem_lakes, LakeID, 'Link with maximum flow drains to ocean or internally')
+            if debug:
+                printMessages(arcpy, ['        Link with maximum flow drains to ocean or internally'])
+            #Lake_Link_Type_local = [1 if com==maxflow else LT for com,LT in zip(Lake_LinksList2, Lake_Link_Type_local)]    # Test to see if lakes that flow to a nodata point can be kept in WRF-Hydro
+            counter7 += 1                                                       # Advance the counter
+        elif FLWBarr[FLWBarr[FLID]==FromComIDs.get(maxflow)].shape[0] > 0:      # This is a downstream lake
+            # This is a real downstream segment
+            problem_lakes = set_problem(problem_lakes, LakeID, 'Downstream of outlet segment is a lake segment')
+            if debug:
+                printMessages(arcpy, ['        Downstream of outlet segment is a lake segment'])
+            counter6 += 1                                                       # Advance the counter
+        else:
+            # This is a legitimate downstream flowline. Alter local lake link types to reflect the outlet link type
+            Lake_Link_Type_local = [1 if com==maxflow else LT for com,LT in zip(Lake_LinksList2, Lake_Link_Type_local)]
+
+        # Additional check: Does the lake have only Type=3 and Type=1 links in it? If so, elminate. Added 2/15/2018
+        if 1 not in list(set(Lake_Link_Type_local)):
+            problem_lakes = set_problem(problem_lakes, LakeID, 'This lake has no type=1 (outlet) link in it. Eliminating...')
+            if debug:
+                printMessages(arcpy, ['        This lake has no type=1 (outlet) link in it. Eliminating...'])
+            counter8 += 1                                                       # Advance the counter
+
+            # Before eliminating this lake, save the information in a separate table
+            arrsize = Tossed_Lake_Link_Type_arr.shape[0]                        # Get current length of the array
+            Tossed_Lake_Link_Type_arr.resize(arrsize + len(Lake_LinksList2), refcheck=False)    # Add rows to the recarray to store new data
+            Tossed_Lake_Link_Type_arr[FLID][arrsize:] = Lake_LinksList2         # Add Lake_LinksList to the list
+            Tossed_Lake_Link_Type_arr['LINK_TYPE'][arrsize:] = Lake_Link_Type_local         # Add Lake Link Types
+            Tossed_Lake_Link_Type_arr[LakeAssociation][arrsize:] = [LakeID for item in Lake_LinksList2]         # Add WBAREACOMI lake associations
+            Tossed_Lake_Link_Type_arr['Accum1'][arrsize:] = Accum1_local        # Added 2/17/2018 to keep track of lake local accumulation
+            Tossed_Lake_Link_Type_arr['Accum2'][arrsize:] = Accum2_local        # Added 2/17/2018 to keep track of lake local accumulation
+            Tossed_Lake_Link_Type_arr['Reason'][arrsize:] = 2                   # Reason: 'This lake has no type=1 (outlet) link in it. Eliminating...'
+            continue                                                            # Added 2/15/2018 as a test to eliminate these lakes from RouteLink
+
+        # Iterate the lake counter and print a statement every so often
+        counter += 1                                                            # Advance the main counter
+        if counter % 1000 == 0:
+            printMessages(arcpy, ['        {0} lakes processed in {1:3.2f} seconds.'.format(counter, time.time()-tic2)])
+            tic2 = time.time()
+
+        # Store link type information in lists
+        Lake_Link_Type_COMID += Lake_LinksList2                                 # Add Lake_LinksList to the list
+        Lake_Link_Type_WBAREACOMI += [LakeID for item in Lake_LinksList2]       # Append LakeID for all items in the Lake_LinksList
+        Lake_Link_Type += Lake_Link_Type_local
+        Lake_Link_Type_Accum1 += Accum1_local                                   # Added 2/17/2018 to keep track of lake local accumulation
+        Lake_Link_Type_Accum2 += Accum2_local                                   # Added 2/17/2018 to keep track of lake local accumulation
+        del Lake_Link_Type_local
+
+    # Subset Lake_Link_Type_arr to just the links in XXX
+    Lake_Link_Type_arr = numpy.zeros(len(Lake_Link_Type_COMID), dtype=dtype1)
+    Lake_Link_Type_arr[FLID] = Lake_Link_Type_COMID                             # Populate with lake COMIDs
+    Lake_Link_Type_arr['LINK_TYPE'] = Lake_Link_Type                            # Add Lake Link Types
+    Lake_Link_Type_arr[LakeAssociation] = Lake_Link_Type_WBAREACOMI                   # Add WBAREACOMI lake associations
+    Lake_Link_Type_arr['Accum1'] = Lake_Link_Type_Accum1                        # Add unrouted lake accumulation
+    Lake_Link_Type_arr['Accum2'] = Lake_Link_Type_Accum2                        # Add routed lake accumulation
+    del Lake_Link_Type_COMID, Lake_Link_Type, Lake_Link_Type_WBAREACOMI, dtype1, dtype2, Lake_LinkDict
+
+    # Remove WBAREACOMI association for the multiple outlets (other than that with max flow)
+    FLWBarr = FLWBarr[~numpy.in1d(FLWBarr[FLID], numpy.array(Remove_Association))]   # Remove from the array any items that need the association removed
+    Lake_Link_Type_arr[LakeAssociation][numpy.in1d(Lake_Link_Type_arr[FLID], numpy.array(Remove_Association))] = 0  # Old Way (left alot of zeros) Remove WBAREACOMI lake associations
+    Lake_Link_Type_arr = Lake_Link_Type_arr[Lake_Link_Type_arr[LakeAssociation]!= 0]  # Now remove all lake associations with lake ID = 0 (added 2/14/2018)
+
+    # Clean up and return
+    printMessages(arcpy, ['        {0} lake associations eliminated due to multiple outlets.'.format(counter3)])
+    printMessages(arcpy, ['        {0} lakes are a headwater lake (no inflows).'.format(counter4)])
+    printMessages(arcpy, ['        {0} lakes have an endorheic lake lake condition.'.format(counter5)])
+    printMessages(arcpy, ['        {0} lakes eliminated due to having a lake immediately downstream.'.format(counter6)])
+    printMessages(arcpy, ['        {0} lakes have an outlet that drains to nowhere.'.format(counter7)])
+    printMessages(arcpy, ['        {0} lakes eliminated due to having no type 1 (outlet) segments associated with it.'.format(counter8)])
+    printMessages(arcpy, ['        Examined {0} lakes in {1:3.2f} seconds.'.format(len(seen), time.time()-tic1)])
+    return Lake_Link_Type_arr, problem_lakes, seen, ChainedLakes, Old_New_LakeComID, FLWBarr, Remove_Association, Tossed_Lake_Link_Type_arr
+
+def LK_main(arcpy, outDir, Flowline, Waterbody, FromComIDs, order, fields, Subset_arr=None, NJ=False, datestr=datestr, LakeAssociation=LakeAssoc):
+    '''
+    This is the main lake pre-processing function.
+    '''
+
+    # Setup Logging
+    tic1 = time.time()
+    printMessages(arcpy, ['    Lake module initiated on {0}'.format(time.ctime())])
+
+    if Flowline is not None:
+        # This is the normal case. The user wishes to evaluate flowline:waterbody associations for either a flowline feature class
+        # which has the associations specified, or perform a spatial join between those flowlines and a Waterbody feature class.
+        outDir = outDir     # Will save spatial joined feature class to disk
+        #outDir = None       # Will not save spatial joined feature class to disk
+        WaterbodyDict = Waterbody_SpatialJoin(arcpy, Flowline, Waterbody, fields, NJ, outDir=outDir)     # Build table of Lake Connectivity for each reach based on simple intersection
+    else:
+        # This is the case where the user is only wishing to submit a dictionary of flowline:waterbody associations for evaluation
+        # Thus, choose Flowline=None and Waterbody=WaterbodyDict in the main() function arguments.
+        # Populate dictionary of all flowline/lake intersections
+        WaterbodyDict = {item[0]:[item[1]] for item in Waterbody.items()}   # Convert to lists
+
+    # Create an array of all flowlines associated with all lakes from WaterbodyDict
+    dtype = dict(names=(FLID, LakeAssociation), formats=('<i4', '<i4'))
+    FLWBarr = numpy.array([(item[0], item[1][0]) for item in WaterbodyDict.items()], dtype=dtype)   # Grab the first lake association for any flowline
+    printMessages(arcpy, ['        Found {0} unique lake ComIDs from flowline association'.format(numpy.unique(FLWBarr[LakeAssociation]).shape[0])])
+
+    # Gather all link lake types
+    Lake_Link_Type_arr, problem_lakes, seen, ChainedLakes, Old_New_LakeComID, FLWBarr, Remove_Association, Tossed_Lake_Link_Type_arr = Lake_Link_Type(arcpy, FLWBarr, FromComIDs, order, subset=Subset_arr, LakeAssociation=LakeAssociation)
+    unique_lakes = numpy.unique(Lake_Link_Type_arr[LakeAssociation]).shape[0]
+    printMessages(arcpy, ['      Found {0} unique lake comID values.'.format(unique_lakes)])
+    printMessages(arcpy, ['      Found {0} outlet flowlines.'.format(Lake_Link_Type_arr[Lake_Link_Type_arr['LINK_TYPE']==1].shape[0])])
+    printMessages(arcpy, ['      Found {0} internal flowlines.'.format(Lake_Link_Type_arr[Lake_Link_Type_arr['LINK_TYPE']==2].shape[0])])
+    printMessages(arcpy, ['      Found {0} contributing flowlines.'.format(Lake_Link_Type_arr[Lake_Link_Type_arr['LINK_TYPE']==3].shape[0])])
+    printMessages(arcpy, ['      Problems: {0}'.format(len(problem_lakes))])
+    printMessages(arcpy, ['      Chained Lakes: {0}'.format(ChainedLakes.keys())])
+
+    # Write the lake problem file to a CSV format file
+    LakeProblemFile = os.path.join(outDir, 'Lake_Problems.csv')
+    printMessages(arcpy, ['      Writing Lake_Problems dictionary to file: {0}'.format(LakeProblemFile)])
+    with open(LakeProblemFile,'wb') as f:
+        w = csv.writer(f)
+        w.writerows(problem_lakes.items())
+
+    # Write the dictionary to disk as CSV file that shows which lakes have been merged (added 1/16/2017)
+    Old_New_LakeComIDFile = os.path.join(outDir, 'Old_New_LakeComIDs.csv')
+    printMessages(arcpy, ['      Writing Lake merging dictionary to file: {0}'.format(Old_New_LakeComIDFile)])
+    with open(Old_New_LakeComIDFile,'wb') as f:
+        w = csv.writer(f)
+        w.writerows(Old_New_LakeComID.items())
+
+    # Save the Lake_Link_Type array
+    if save_Lake_Link_Type_arr:
+        Lake_Link_Type_File = os.path.join(outDir, 'Lake_Link_Types.csv')
+        printMessages(arcpy, ['      Writing Lake_Link_Type array to file: {0}'.format(Lake_Link_Type_File)])
+        numpy.savetxt(Lake_Link_Type_File, Lake_Link_Type_arr, fmt='%i', delimiter=",")
+
+    # Save the tossed Lake_Link_Type array
+    Lake_Link_Type_File2 = os.path.join(outDir, 'Tossed_Lake_Link_Types.csv')
+    printMessages(arcpy, ['      Writing Tossed Lake_Link_Type array to file: {0}'.format(Lake_Link_Type_File2)])
+    numpy.savetxt(Lake_Link_Type_File2, Tossed_Lake_Link_Type_arr, fmt='%i', delimiter=",")
+
+    # Re-assign the array to a dictionary type
+    #WaterbodyDict = {item[FLID]:item[LakeAssociation] for item in FLWBarr}      # Output to dictionary
+    WaterbodyDict = {item[FLID]:item[LakeAssociation] for item in Lake_Link_Type_arr[Lake_Link_Type_arr['LINK_TYPE']<3]}      # Output to dictionary from new Lake Link Type Array (excluding inflow links)
+
+    # Clean up and return
+    #del Subset_arr, dtype, problem_lakes, seen, ChainedLakes, Remove_Association, FLWBarr
+    printMessages(arcpy, ['    Finished building Lake Association and flowline connectivity tables.  Time elapsed: {0:3.2f} seconds.'.format(time.time()-tic1)])
+    return WaterbodyDict, Lake_Link_Type_arr, Old_New_LakeComID
 
 # --- End Functions --- #
 

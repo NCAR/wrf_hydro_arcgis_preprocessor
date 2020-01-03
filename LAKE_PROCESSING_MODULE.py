@@ -31,30 +31,50 @@ from itertools import izip                                                      
 from operator import itemgetter                                                 # Used in the group_min function
 import collections                                                              # Used in the group_min function
 
-# Module configurations
-datestr = time.strftime("%Y_%m_%d")                                             # Date string to append to output files
-
 ###################################################
 # Globals
+datestr = time.strftime("%Y_%m_%d")                                             # Date string to append to output files
 FLID = 'COMID'                                                                  # Field name for the flowline IDs
 LakeAssoc = 'WBAREACOMI'                                                        # Field name containing link-to-lake association
 NoDownstream = [None, -1, 0]                                                    # A list of possible values indicating that the downstream segment is invalid (ocean, network endpoint, etc.)
 LkNodata = 0                                                                    # Set the nodata value for the link-to-lake association
-fromID = 'FROMCOMID'
-toID = 'TOCOMID'
-ftype = 'FTYPE'
-maxelev = 'MAXELEVSMO'                                                          # Elevation at start (upstream) node [included in NHDPlus HR]
-slope = 'SLOPE'                                                                 # Slope field (m/m) [included in NHDPlus HR]
-length = 'LengthKM'                                                             # Length field in km
-strmOrd = 'StreamOrde'                                                          # Stream order field
-diverg = 'Divergence'
-strmCalc = 'StreamCalc'
 hydroSeq = 'HydroSeq'
-
 save_Lake_Link_Type_arr = True                                                  # Switch for saving the Lake_Link_Type_arr array to CSV
 ##################################################
 
+class TeeNoFile(object):
+    '''
+    Send print statements to a log file:
+    http://web.archive.org/web/20141016185743/https://mail.python.org/pipermail/python-list/2007-May/460639.html
+    https://stackoverflow.com/questions/11124093/redirect-python-print-output-to-logger/11124247
+    '''
+    def __init__(self, name, mode):
+        self.file = open(name, mode)
+        self.stdout = sys.stdout
+        sys.stdout = self
+    def close(self):
+        if self.stdout is not None:
+            sys.stdout = self.stdout
+            self.stdout = None
+        if self.file is not None:
+            self.file.close()
+            self.file = None
+    def write(self, data):
+        self.file.write(data)
+        self.stdout.write(data)
+    def flush(self):
+        self.file.flush()
+        self.stdout.flush()
+    def __del__(self):
+        self.close()
+
 # Functions
+def printMessages(arcpy, messages):
+    '''provide a list of messages and they will be printed and returned as tool messages.'''
+    for i in messages:
+        print(i)
+        #arcpy.AddMessage(i)
+
 def group_min(l, g):
     '''Function for gathering minimum value from a set of groups'''
     groups = collections.defaultdict(int)
@@ -73,9 +93,9 @@ def Waterbody_SpatialJoin(arcpy, Flowline, Waterbody, fields, NJ=True, outDir=No
     feature class.'''
 
     tic1 = time.time()
-    print('    Fields requested: {0}, {1}'.format(fields[0], fields[1]))
+    printMessages(arcpy, ['      Fields requested: {0}, {1}'.format(fields[0], fields[1])])
     if NJ:
-        print("  Starting to Intersect flowline network with waterbodies.")
+        printMessages(arcpy, ['      Starting to Intersect flowline network with waterbodies.'])
         if not outDir:
             OutFC = 'in_memory/IntersectFC'
         else:
@@ -87,7 +107,7 @@ def Waterbody_SpatialJoin(arcpy, Flowline, Waterbody, fields, NJ=True, outDir=No
         intersectarr = arcpy.da.FeatureClassToNumPyArray(OutFC, fields)
         arcpy.Delete_management(OutFC)
     else:
-        print("  Using previously intersected feature class of flowlines to waterbodies: {0}.".format(Waterbody))
+        printMessages(arcpy, ['      Using previously intersected feature class of flowlines to waterbodies: {0}.'.format(Waterbody)])
         intersectarr = arcpy.da.FeatureClassToNumPyArray(Waterbody, fields)
 
         # Remove elements where there is no flowline:lake association (mirroring the "KEEP_COMMON" option in the Spatial Join step above).
@@ -103,12 +123,12 @@ def Waterbody_SpatialJoin(arcpy, Flowline, Waterbody, fields, NJ=True, outDir=No
             WaterbodyDict[x[fields[0]]] = [x[fields[1]]]
     del intersectarr
 
-    print("    Size of Dictionary: {0} flowlines comprising {1} lake intersections".format(len(WaterbodyDict), sum([len(WaterbodyDict[i]) for i in WaterbodyDict])))
-    print('    Found {0} flowlines with connectivity to lakes.'.format(len(WaterbodyDict)))
+    printMessages(arcpy, ['      Size of Dictionary: {0} flowlines comprising {1} lake intersections'.format(len(WaterbodyDict), sum([len(WaterbodyDict[i]) for i in WaterbodyDict]))])
+    printMessages(arcpy, ['      Found {0} flowlines with connectivity to lakes.'.format(len(WaterbodyDict))])
     if NJ:
-        print("  Finished intersecting flowline network with waterbodies in {0:3.2f}s".format(time.time()-tic1))
+        printMessages(arcpy, ['      Finished intersecting flowline network with waterbodies in {0:3.2f}s'.format(time.time()-tic1)])
     else:
-        print("  Finished using previously intersected feature class to determine flowline-to-waterbody associations in {0}s".format(time.time()-tic1))
+        printMessages(arcpy, ['      Finished using previously intersected feature class to determine flowline-to-waterbody associations in {0: 3.2f}s'.format(time.time()-tic1)])
     return WaterbodyDict
 
 def set_problem(problem_lakes, LakeID, problemstr):
@@ -294,7 +314,7 @@ def get_lake_routing_info(FLWBarr, localLk, Lake_LinkDict, accum_val, FromComIDs
     inflows = numpy.array(inflows)
     return Lake_LinksList, inflows, SegVals, SegVals2, ups, newLakeLinks
 
-def Lake_Link_Type(FLWBarr, FromComIDs, FLarr, subset=None):
+def Lake_Link_Type(arcpy, FLWBarr, FromComIDs, FLarr, subset=None):
     '''
     This function will assign a link type to each lake.
             3 = Lake Inflow Link
@@ -359,7 +379,7 @@ def Lake_Link_Type(FLWBarr, FromComIDs, FLarr, subset=None):
             FromSegs[val] += [key]
         except KeyError:
             FromSegs[val] = [key]
-    print('    Completed FromSegs dictionary in {0:3.2f} seconds.'.format(time.time()-tic2))
+    printMessages(arcpy, ['      Completed FromSegs dictionary in {0:3.2f} seconds.'.format(time.time()-tic2)])
 
     # 2) Create a sorting of lakes that will start with the lake which has the lowest HydroSeq value in it's flowlines
     # Use indexing to grab elements common to both arrays while preserving order of one of the arrays (FLWBarr)
@@ -382,7 +402,7 @@ def Lake_Link_Type(FLWBarr, FromComIDs, FLarr, subset=None):
     LakeSeq = LakeSeq[LakeSeq[FLID]>-9998]                                      # Clip off -9999, -9998
     LakeSeq.sort(order='minHydroSeq')                                           # Sort by minimum HydroSeq
     LakeSeqsize = LakeSeq.shape[0]                                              # Get the number of elements in the array
-    print('    Completed sorting lakes by minimum HydroSeq in {0:3.2f} seconds.'.format(time.time()-tic2))
+    printMessages(arcpy, ['      Completed sorting lakes by minimum HydroSeq in {0:3.2f} seconds.'.format(time.time()-tic2)])
 
     # 3)  Find outflow link and assign type 1 (but not if it flows into another lake)
     counter = 0                                                                 #
@@ -396,7 +416,7 @@ def Lake_Link_Type(FLWBarr, FromComIDs, FLarr, subset=None):
     seen = []                                                                   # Lakes in this list have been 'seen', or reviewed
     if subset is not None:
         LakeSeq = LakeSeq[numpy.in1d(LakeSeq[FLID], subset[FLID])]              # Subset the list of lakes to a subset array if requested
-        print('  Subsetted the lakes from {0} to {1} based on a provided subset array.'.format(LakeSeqsize, LakeSeq.shape[0]))
+        printMessages(arcpy, ['      Subsetted the lakes from {0} to {1} based on a provided subset array.'.format(LakeSeqsize, LakeSeq.shape[0])])
     for LakeID in LakeSeq[FLID]:
         if LakeID in seen:
             continue                                                            # This lake has already been examined
@@ -440,7 +460,7 @@ def Lake_Link_Type(FLWBarr, FromComIDs, FLarr, subset=None):
         # Alter all Waterbody ComIDs at once to match the most downstream lake and regenerate lake information for the new, merged lake
         if len(to_alter) > 0:
             ChainedLakes[LakeID] = to_alter                                     # Add list of upstream lakes to this dictionary for this lake
-            print('    Altering {0} lake COMID value(s) to {1}'.format(len(to_alter), LakeID))
+            printMessages(arcpy, ['      Altering {0} lake COMID value(s) to {1}'.format(len(to_alter), LakeID)])
             for item in to_alter:
                 problem_lakes = set_problem(problem_lakes, LakeID, 'Upstream segment for {0} belongs to another lake [{1}]'.format(LakeID, item))
             FLWBarr[LakeAssoc][numpy.in1d(FLWBarr[LakeAssoc], numpy.array(to_alter))] = LakeID  # Change all the IDs of the upstream lakes at once to the current lake ID
@@ -551,7 +571,7 @@ def Lake_Link_Type(FLWBarr, FromComIDs, FLarr, subset=None):
         # Iterate the lake counter and print a statement every so often
         counter += 1                                                            # Advance the main counter
         if counter % 1000 == 0:
-            print('        {0} lakes processed in {1:3.2f} seconds.'.format(counter, time.time()-tic2))
+            printMessages(arcpy, ['        {0} lakes processed in {1:3.2f} seconds.'.format(counter, time.time()-tic2)])
             tic2 = time.time()
 
         # Store link type information in lists
@@ -577,24 +597,27 @@ def Lake_Link_Type(FLWBarr, FromComIDs, FLarr, subset=None):
     Lake_Link_Type_arr = Lake_Link_Type_arr[Lake_Link_Type_arr[LakeAssoc]!= 0]  # Now remove all lake associations with lake ID = 0 (added 2/14/2018)
 
     # Clean up and return
-    print('    {0} lake associations eliminated due to multiple outlets.'.format(counter3))
-    print('    {0} lakes are a headwater lake (no inflows).'.format(counter4))
-    print('    {0} lakes have an endorheic lake lake condition.'.format(counter5))
-    print('    {0} lakes eliminated due to having a lake immediately downstream.'.format(counter6))
-    print('    {0} lakes have an outlet that drains to nowhere.'.format(counter7))
-    print('    {0} lakes eliminated due to having no type 1 (outlet) segments associated with it.'.format(counter8))
-    print('  Examined {0} lakes in {1:3.2f} seconds.'.format(len(seen), time.time()-tic1))
+    printMessages(arcpy, ['        {0} lake associations eliminated due to multiple outlets.'.format(counter3)])
+    printMessages(arcpy, ['        {0} lakes are a headwater lake (no inflows).'.format(counter4)])
+    printMessages(arcpy, ['        {0} lakes have an endorheic lake lake condition.'.format(counter5)])
+    printMessages(arcpy, ['        {0} lakes eliminated due to having a lake immediately downstream.'.format(counter6)])
+    printMessages(arcpy, ['        {0} lakes have an outlet that drains to nowhere.'.format(counter7)])
+    printMessages(arcpy, ['        {0} lakes eliminated due to having no type 1 (outlet) segments associated with it.'.format(counter8)])
+    printMessages(arcpy, ['      Examined {0} lakes in {1:3.2f} seconds.'.format(len(seen), time.time()-tic1)])
     return Lake_Link_Type_arr, problem_lakes, seen, ChainedLakes, Old_New_LakeComID, FLWBarr, Remove_Association, Tossed_Lake_Link_Type_arr
 
 def main(arcpy, outDir, Flowline, Waterbody, FromComIDs, order, fields, Subset_arr=None, NJ=False, datestr=datestr):
-
     '''
 
     '''
+
+    # Setup Logging
+    LakeDiagnosticFile = os.path.join(outDir, 'Lake_Preprocssing_Info.txt')
+    tee = TeeNoFile(LakeDiagnosticFile, 'w')
 
     # Set up logging
     tic1 = time.time()
-    print('Lake module initiated on {0}'.format(time.ctime()))
+    printMessages(arcpy, ['    Lake module initiated on {0}'.format(time.ctime())])
 
     if Flowline is not None:
         # This is the normal case. The user wishes to evaluate flowline:waterbody associations for either a flowline feature class
@@ -611,41 +634,41 @@ def main(arcpy, outDir, Flowline, Waterbody, FromComIDs, order, fields, Subset_a
     # Create an array of all flowlines associated with all lakes from WaterbodyDict
     dtype = dict(names=(FLID,LakeAssoc), formats=('<i4', '<i4'))
     FLWBarr = numpy.array([(item[0], item[1][0]) for item in WaterbodyDict.items()], dtype=dtype)   # Grab the first lake association for any flowline
-    print('  Found {0} unique lake ComIDs from flowline association'.format(numpy.unique(FLWBarr[LakeAssoc]).shape[0]))
+    printMessages(arcpy, ['    Found {0} unique lake ComIDs from flowline association'.format(numpy.unique(FLWBarr[LakeAssoc]).shape[0])])
 
     # Gather all link lake types
-    Lake_Link_Type_arr, problem_lakes, seen, ChainedLakes, Old_New_LakeComID, FLWBarr, Remove_Association, Tossed_Lake_Link_Type_arr = Lake_Link_Type(FLWBarr, FromComIDs, order, subset=Subset_arr)
+    Lake_Link_Type_arr, problem_lakes, seen, ChainedLakes, Old_New_LakeComID, FLWBarr, Remove_Association, Tossed_Lake_Link_Type_arr = Lake_Link_Type(arcpy, FLWBarr, FromComIDs, order, subset=Subset_arr)
     unique_lakes = numpy.unique(Lake_Link_Type_arr[LakeAssoc]).shape[0]
-    print('    Found {0} unique lake comID values.'.format(unique_lakes))
-    print('    Found {0} outlet flowlines.'.format(Lake_Link_Type_arr[Lake_Link_Type_arr['LINK_TYPE']==1].shape[0]))
-    print('    Found {0} internal flowlines.'.format(Lake_Link_Type_arr[Lake_Link_Type_arr['LINK_TYPE']==2].shape[0]))
-    print('    Found {0} contributing flowlines.'.format(Lake_Link_Type_arr[Lake_Link_Type_arr['LINK_TYPE']==3].shape[0]))
-    print('    Problems: {0}'.format(len(problem_lakes)))
-    print('    Chained Lakes: {0}'.format(ChainedLakes.keys()))
+    printMessages(arcpy, ['    Found {0} unique lake comID values.'.format(unique_lakes)])
+    printMessages(arcpy, ['    Found {0} outlet flowlines.'.format(Lake_Link_Type_arr[Lake_Link_Type_arr['LINK_TYPE']==1].shape[0])])
+    printMessages(arcpy, ['    Found {0} internal flowlines.'.format(Lake_Link_Type_arr[Lake_Link_Type_arr['LINK_TYPE']==2].shape[0])])
+    printMessages(arcpy, ['    Found {0} contributing flowlines.'.format(Lake_Link_Type_arr[Lake_Link_Type_arr['LINK_TYPE']==3].shape[0])])
+    printMessages(arcpy, ['    Problems: {0}'.format(len(problem_lakes))])
+    printMessages(arcpy, ['    Chained Lakes: {0}'.format(ChainedLakes.keys())])
 
     # Write the lake problem file to a CSV format file
-    LakeProblemFile = os.path.join(outDir, 'Lake_Problems_{0}.csv'.format(datestr))
-    print('    Writing Lake_Problems dictionary to file: {0}'.format(LakeProblemFile))
+    LakeProblemFile = os.path.join(outDir, 'Lake_Problems.csv')
+    printMessages(arcpy, ['    Writing Lake_Problems dictionary to file: {0}'.format(LakeProblemFile)])
     with open(LakeProblemFile,'wb') as f:
         w = csv.writer(f)
         w.writerows(problem_lakes.items())
 
     # Write the dictionary to disk as CSV file that shows which lakes have been merged (added 1/16/2017)
-    Old_New_LakeComIDFile = os.path.join(outDir, 'Old_New_LakeComIDs_{0}.csv'.format(datestr))
-    print('    Writing Lake merging dictionary to file: {0}'.format(Old_New_LakeComIDFile))
+    Old_New_LakeComIDFile = os.path.join(outDir, 'Old_New_LakeComIDs.csv')
+    printMessages(arcpy, ['    Writing Lake merging dictionary to file: {0}'.format(Old_New_LakeComIDFile)])
     with open(Old_New_LakeComIDFile,'wb') as f:
         w = csv.writer(f)
         w.writerows(Old_New_LakeComID.items())
 
     # Save the Lake_Link_Type array
     if save_Lake_Link_Type_arr:
-        Lake_Link_Type_File = os.path.join(outDir, 'Lake_Link_Types_{0}.csv'.format(datestr))
-        print('    Writing Lake_Link_Type array to file: {0}'.format(Lake_Link_Type_File))
+        Lake_Link_Type_File = os.path.join(outDir, 'Lake_Link_Types.csv')
+        printMessages(arcpy, ['    Writing Lake_Link_Type array to file: {0}'.format(Lake_Link_Type_File)])
         numpy.savetxt(Lake_Link_Type_File, Lake_Link_Type_arr, fmt='%i', delimiter=",")
 
     # Save the tossed Lake_Link_Type array
-    Lake_Link_Type_File2 = os.path.join(outDir, 'Tossed_Lake_Link_Types_{0}.csv'.format(datestr))
-    print('    Writing Tossed Lake_Link_Type array to file: {0}'.format(Lake_Link_Type_File2))
+    Lake_Link_Type_File2 = os.path.join(outDir, 'Tossed_Lake_Link_Types.csv')
+    printMessages(arcpy, ['    Writing Tossed Lake_Link_Type array to file: {0}'.format(Lake_Link_Type_File2)])
     numpy.savetxt(Lake_Link_Type_File2, Tossed_Lake_Link_Type_arr, fmt='%i', delimiter=",")
 
     # Re-assign the array to a dictionary type
@@ -654,7 +677,9 @@ def main(arcpy, outDir, Flowline, Waterbody, FromComIDs, order, fields, Subset_a
 
     # Clean up and return
     #del Subset_arr, dtype, problem_lakes, seen, ChainedLakes, Remove_Association, FLWBarr
-    print("Finished building Lake Association and flowline connectivity tables.  Time elapsed: {0:3.2f} seconds.".format(time.time()-tic1))
+    printMessages(arcpy, ['    Finished building Lake Association and flowline connectivity tables.  Time elapsed: {0:3.2f} seconds.'.format(time.time()-tic1)])
+    tee.close()
+    del tee
     return WaterbodyDict, Lake_Link_Type_arr, Old_New_LakeComID
 
 if __name__ == '__main__':
