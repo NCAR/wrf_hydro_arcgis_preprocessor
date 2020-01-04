@@ -673,8 +673,8 @@ def ReprojectCoords(arcpy, xcoords, ycoords, src_srs, tgt_srs):
 
     point = arcpy.Point()
     for num, (x, y) in enumerate(zip(ravel_x, ravel_y)):
-        point.X = x
-        point.Y = y
+        point.X = float(x)
+        point.Y = float(y)
         pointGeometry = arcpy.PointGeometry(point, src_srs)
         projpoint = pointGeometry.projectAs(tgt_srs)                            # Optionally add transformation method:
         x1 = projpoint.firstPoint.X

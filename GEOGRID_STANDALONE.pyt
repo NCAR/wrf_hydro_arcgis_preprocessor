@@ -738,6 +738,7 @@ class GenerateLatLon(object):
         """The source code of the tool."""
 
         # Set environments
+        reload(wrfh)                                                            # Reload in case code changes have been made
         arcpy.env.overwriteOutput = True
 
         # Gather all necessary parameters
@@ -768,10 +769,14 @@ class GenerateLatLon(object):
             wgs84_proj = arcpy.SpatialReference()                               # Projectipm coordinate system is specified by wkt_text in globals
             wgs84_proj.loadFromString(wrfh.wkt_text)                            # Load the Sphere datum CRS using WKT
             xmap, ymap = wrfh.getxy(arcpy, in_raster, projdir)
-            latArr2, lonArr2 = wrfh.ReprojectCoords(arcpy, xmap, ymap, sr_in, wgs84_proj)  # Transform coordinate arrays
+            xmap_arr = arcpy.RasterToNumPyArray(xmap)                            # Read channel grid array
+            ymap_arr = arcpy.RasterToNumPyArray(ymap)                            # Read channel grid array
+            latArr2, lonArr2 = wrfh.ReprojectCoords(arcpy, xmap_arr, ymap_arr, sr_in, wgs84_proj)  # Transform coordinate arrays
+            arcpy.Delete_management(xmap)
+            arcpy.Delete_management(ymap)
             xout2 = arcpy.NumPyArrayToRaster(lonArr2, extent.lowerLeft, DX, DY)
             yout2 = arcpy.NumPyArrayToRaster(latArr2, extent.lowerLeft, DX, DY)
-            del xmap, ymap, wgs84_proj, latArr2, lonArr2, DY, DX
+            del xmap, ymap, wgs84_proj, latArr2, lonArr2, DY, DX, xmap_arr, ymap_arr
 
         # Write to disk
         xout2.save(os.path.join(projdir, 'longitude'))
@@ -1126,7 +1131,7 @@ class Reach_Based_Routing_Addition(object):
             frxst_raster = None                                                 # Default is no forecast points for reach-based routing file
         else:
             frxst_raster = SetNull(frxst_raster, frxst_raster, "VALUE = %s" %wrfh.NoDataVal)
-        linkid = wrfh.Routing_Table(arcpy, projdir, sr, strm, fdir, fill2, order2, WKT=WKT, gages=frxst_raster)
+        linkid = wrfh.Routing_Table(arcpy, projdir, sr, strm, fdir, fill2, order2, gages=frxst_raster)
         linkid_arr = arcpy.RasterToNumPyArray(linkid)
 
         # Add new LINKID grid to the FullDom file
