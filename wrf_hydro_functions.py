@@ -23,16 +23,10 @@ from collections import defaultdict                                             
 from itertools import takewhile, count, izip                                    # Added 09/03/2015Needed for topological sorting algorthm                                                                  # Added 07/10/2015 for ExmineOutputs
 import netCDF4
 import numpy
-from arcpy.sa import *                                                          # Part of ArcGIS 10.3, added to this script 6/11/2015
 
 # Pure python method of getting unique sums - from http://stackoverflow.com/questions/4373631/sum-array-by-number-in-numpy
 from operator import itemgetter                                                 # Used in the group_min function
 import collections                                                              # Used in the group_min function
-
-##try:
-##    import LAKE_PROCESSING_MODULE as LK_Routing
-##except:
-##    pass
 # --- End Import Modules --- #
 
 # --- Module Configurations --- #
@@ -1213,7 +1207,7 @@ def coordMethod2(arcpy, grid_obj):
     wgs84_proj = arcpy.SpatialReference()                                       # Project lake points to whatever coordinate system is specified by wkt_text in globals
     wgs84_proj.loadFromString(wkt_text)                                         # Load the Sphere datum CRS using WKT
     xmap, ymap = grid_obj.getxy()                                               # Get x and y coordinates as numpy array
-    latArr2, lonArr2 = ReprojectCoords(arcpy, xmap, ymap, grid_obj.proj, wgs84_proj)  # Transform coordinate arrays
+    lonArr2, latArr2 = ReprojectCoords(arcpy, xmap, ymap, grid_obj.proj, wgs84_proj)  # Transform coordinate arrays
     del xmap, ymap, wgs84_proj
     return latArr2, lonArr2
 
@@ -2635,7 +2629,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
             nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables['TOPOGRAPHY'][:]))
             arcpy.CalculateStatistics_management(nc_raster)
 
-           # Gather projection and set output coordinate system
+            # Gather projection and set output coordinate system
             descData = arcpy.Describe(nc_raster)
             sr = descData.spatialReference
             arcpy.env.outputCoordinateSystem = sr
@@ -2647,11 +2641,11 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
             descData = arcpy.Describe(in_Polys)
             GWBasnsFile = os.path.join('in_memory', 'poly_basins')
             arcpy.PolygonToRaster_conversion(in_Polys, descData.OIDFieldName, GWBasnsFile, "MAXIMUM_AREA", "", grid_obj.DX)
-            GWBasns = arcpy.Raster(GWBasnsFile)                                         # Create raster object from raster layer
+            GWBasns = arcpy.Raster(GWBasnsFile)                                 # Create raster object from raster layer
             arcpy.Delete_management(nc_raster)
             del nc_raster
 
-        GWBasns_arr = arcpy.RasterToNumPyArray(GWBasns)                             # Create array from raster
+        GWBasns_arr = arcpy.RasterToNumPyArray(GWBasns)                         # Create array from raster
         rootgrp1.close()
         printMessages(arcpy, ['Finished building groundwater basin grids in %3.2f seconds' %(time.time()-tic1)])
         del sr, descData
@@ -2686,6 +2680,8 @@ def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, coarse_grid, tbl_type
     '''
 
     tic1 = time.time()
+    GW_BUCKS = os.path.join('in_memory', 'GWBUCKS_orig')                        # Groundwater bucket raster on the coarse grid before re-numbering 1...n
+    GW_BUCKS2 = os.path.join(out_dir, "GWBUCKS")                                # Output groundwater bucket raster file location
     printMessages(arcpy, ['Beginning to build groundwater inputs'])
 
     # Read basin information from the array
@@ -2694,7 +2690,6 @@ def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, coarse_grid, tbl_type
     printMessages(arcpy, ['    Found {0} basins in the watershed grid'.format(UniqueVals.shape)])
     del UniqueVals
 
-    GW_BUCKS = os.path.join('in_memory', 'GWBUCKS_orig')                        # Groundwater bucket raster on the coarse grid before re-numbering 1...n
     coarse_grid.project_to_model_grid(arcpy, GWBasns, GW_BUCKS, resampling="NEAREST")   # Resample from fine grid to coarse grid resolution
     arcpy.Delete_management(GWBasns)                                            # Delete original fine-grid groundwater basin raster
     del GWBasns, GWBasns_arr
@@ -2726,7 +2721,6 @@ def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, coarse_grid, tbl_type
 
     # Build rasters and arrays to create the NC or ASCII outputs
     GW_BUCKS = coarse_grid.numpy_to_Raster(arcpy, GWBasns_arr3, value_to_nodata=new_ndv)
-    GW_BUCKS2 = os.path.join(out_dir, "GWBUCKS")                                # Raster file location
     GW_BUCKS.save(GW_BUCKS2)                                                    # Save raster
     del GWBasns_arr3, idx, to_values, new_ndv
 
@@ -2739,6 +2733,7 @@ def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, coarse_grid, tbl_type
 
     # Alternate method to obtain IDs - read directly from raster attribute table
     printMessages(arcpy, ['    Calculating size and ID parameters for basin polygons.'])
+    arcpy.BuildRasterAttributeTable_management(GW_BUCKS2, "Overwrite")
     Raster_arr = arcpy.da.TableToNumPyArray(GW_BUCKS2, '*')
     cat_comids = Raster_arr['VALUE'].tolist()
     cat_areas = [float((item*(coarse_grid.DX**2))/1000000) for item in Raster_arr['COUNT'].tolist()]  # Assumes cellsize is in units of meters

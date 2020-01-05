@@ -409,7 +409,6 @@ class ProcessGeogridFile(object):
         if not isError:
             try:
                 if GW_with_Stack:
-
                     # Build groundwater files
                     GWBasns, GWBasns_arr = wrfh.build_GW_Basin_Raster(arcpy, out_nc2,
                         projdir, defaultGWmethod, fine_grid, in_Polys=in_GWPolys)
@@ -771,7 +770,7 @@ class GenerateLatLon(object):
             xmap, ymap = wrfh.getxy(arcpy, in_raster, projdir)
             xmap_arr = arcpy.RasterToNumPyArray(xmap)                            # Read channel grid array
             ymap_arr = arcpy.RasterToNumPyArray(ymap)                            # Read channel grid array
-            latArr2, lonArr2 = wrfh.ReprojectCoords(arcpy, xmap_arr, ymap_arr, sr_in, wgs84_proj)  # Transform coordinate arrays
+            lonArr2, latArr2 = wrfh.ReprojectCoords(arcpy, xmap_arr, ymap_arr, sr_in, wgs84_proj)  # Transform coordinate arrays
             arcpy.Delete_management(xmap)
             arcpy.Delete_management(ymap)
             xout2 = arcpy.NumPyArrayToRaster(lonArr2, extent.lowerLeft, DX, DY)
