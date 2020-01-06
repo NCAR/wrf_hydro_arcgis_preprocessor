@@ -19,10 +19,15 @@ import math
 import zipfile
 from zipfile import ZipFile, ZipInfo
 import shutil
-from collections import defaultdict                                             # Added 09/03/2015Needed for topological sorting algorthm
-from itertools import takewhile, count, izip                                    # Added 09/03/2015Needed for topological sorting algorthm                                                                  # Added 07/10/2015 for ExmineOutputs
+from collections import defaultdict                                             # Added 09/03/2015 Needed for topological sorting algorthm
+from itertools import takewhile, count                                          # Added 09/03/2015 Needed for topological sorting algorthm                                                                  # Added 07/10/2015 for ExmineOutputs
 import netCDF4
 import numpy
+from arcpy.sa import *
+try:
+    from itertools import izip as zip                                           # Added 1/6/2020 for Python3 compatibility
+except ImportError: # will be 3.x series
+    pass
 
 # Pure python method of getting unique sums - from http://stackoverflow.com/questions/4373631/sum-array-by-number-in-numpy
 from operator import itemgetter                                                 # Used in the group_min function
@@ -30,7 +35,6 @@ import collections                                                              
 # --- End Import Modules --- #
 
 # --- Module Configurations --- #
-from arcpy.sa import *
 sys.dont_write_bytecode = True                                                  # Do not write compiled (.pyc) files
 # --- End Module Configurations --- #
 
@@ -680,7 +684,7 @@ def ReprojectCoords(arcpy, xcoords, ycoords, src_srs, tgt_srs):
     # reshape transformed coordinate arrays of the same shape as input coordinate arrays
     trans_x = trans_x.reshape(*xcoords.shape)
     trans_y = trans_y.reshape(*ycoords.shape)
-    print('Completed transforming coordinate pairs [{0}] in {1: 3.2f} seconds.'.format(num, time.time()-tic1))
+    printMessages(arcpy, ['Completed transforming coordinate pairs [{0}] in {1: 3.2f} seconds.'.format(num, time.time()-tic1)])
     return trans_x, trans_y
 
 def zipws(arcpy, path, zip, keep, nclist):
@@ -1183,8 +1187,6 @@ def coordMethod1(arcpy, coarse_grid, fine_grid, rootgrp, projdir='in_memory'):
     # Method 1: Use GEOGRID latitude and longitude fields and resample to routing grid
     latRaster1 = coarse_grid.numpy_to_Raster(arcpy, latArr)                     # Build raster out of GEOGRID latitude array - may only work in python 2
     lonRaster1 = coarse_grid.numpy_to_Raster(arcpy, lonArr)                     # Build raster out of GEOGRID longitude array - may only work in python2
-    ##latRaster1 = coarse_grid.numpy_to_Raster(arcpy, latArr.data[0])           # Build raster out of GEOGRID latitude array - may only work in python3
-    ##lonRaster1 = coarse_grid.numpy_to_Raster(arcpy, lonArr.data[0])           # Build raster out of GEOGRID longitude array - may only work in python3
 
     xout = os.path.join(projdir, 'xoutput')
     yout = os.path.join(projdir, 'youtput')
@@ -2586,7 +2588,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
                 maxValue = arcpy.SearchCursor(outStreams_, "", "", "", arcidField + " D").next().getValue(arcidField)  # Gather highest "ARCID" value from field of segment IDs
                 maxRasterValue = arcpy.GetRasterProperties_management(outRaster, "MAXIMUM")                     # Gather maximum "ARCID" value from raster
                 if int(maxRasterValue[0]) > maxValue:
-                    print('    Setting linkid values of %s to Null.' %maxRasterValue[0])
+                    printMessages(arcpy, ['    Setting linkid values of %s to Null.' %maxRasterValue[0]])
                     whereClause = "VALUE = %s" %int(maxRasterValue[0])
                     outRaster = SetNull(outRaster, outRaster, whereClause)          # This should eliminate the discrepency between the numbers of features in outStreams and outRaster
                 outRaster = Con(IsNull(outRaster) == 1, NoDataVal, outRaster)         # Set Null values to -9999 in LINKID raster
@@ -2986,8 +2988,8 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
 
 def group_min(l, g):
     '''Function for gathering minimum value from a set of groups'''
-    groups = collections.defaultdict(int)
-    for li, gi in izip(l, g):
+    groups = defaultdict(int)                                                   # default value of int is 0
+    for li, gi in zip(l, g):
         if li <= groups[gi] or groups[gi]==0:
             groups[gi] = li
     return groups
@@ -3024,7 +3026,6 @@ def Waterbody_SpatialJoin(arcpy, Flowline, Waterbody, fields, NJ=True, outDir=No
 
     # Populate dictionary of all flowline/lake intersections
     WaterbodyDict = {}
-    print(intersectarr)
     for x in intersectarr:
         try:
             WaterbodyDict[x[fields[0]]] += [x[fields[1]]]
@@ -3315,12 +3316,15 @@ def Lake_Link_Type(arcpy, FLWBarr, FromComIDs, FLarr, subset=None, LakeAssociati
     del commons, xsorted, ypos, indices
 
     # Use the group_min function to find the minimum HydroSeq value for each group of WBAREACOMID values
-    group_minDict = group_min(commons2[hydroSeq], FLWBarr[LakeAssociation])         # Find the minimum HydroSeq value for this lake
+    group_minDict = group_min(commons2[hydroSeq], FLWBarr[LakeAssociation])     # Find the minimum HydroSeq value for this lake
     del commons2                                                                # Free up memory
 
     # Construct an array to store the Lake COMID and Minimum Hydrosequence
     dtype = dict(names=(FLID, 'minHydroSeq'), formats=('<i4', '<f8'))
-    LakeSeq = numpy.array(group_minDict.items(), dtype=dtype)                   # Create array of minimum HydroSeq values for each lake
+    printMessages(arcpy, ['group_minDict: {0}'.format(group_minDict)])
+    LakeSeq = numpy.array(list(group_minDict.items()), dtype=dtype)             # Create array of minimum HydroSeq values for each lake
+    #LakeSeq = numpy.array([(group, minimum) for group, minimum in group_minDict.items()], dtype=dtype)  # Create array of minimum HydroSeq values for each lake
+    printMessages(arcpy, ['LakeSeq: {0}'.format(LakeSeq)])
     del group_minDict, dtype                                                    # Free up memory
     LakeSeq = LakeSeq[LakeSeq[FLID]>-9998]                                      # Clip off -9999, -9998
     LakeSeq.sort(order='minHydroSeq')                                           # Sort by minimum HydroSeq
@@ -3342,6 +3346,9 @@ def Lake_Link_Type(arcpy, FLWBarr, FromComIDs, FLarr, subset=None, LakeAssociati
         printMessages(arcpy, ['        Subsetted the lakes from {0} to {1} based on a provided subset array.'.format(LakeSeqsize, LakeSeq.shape[0])])
 
     for LakeID in LakeSeq[FLID]:
+        if debug:
+            printMessages(arcpy, ['          Lake {0}'.format(LakeID)])
+
         if LakeID in seen:
             #printMessages(arcpy, ['          Lake {0} has already been examined.'.format(LakeID)])
             continue                                                            # This lake has already been examined
@@ -3406,7 +3413,6 @@ def Lake_Link_Type(arcpy, FLWBarr, FromComIDs, FLarr, subset=None, LakeAssociati
         #Lake_Link_Type_local = [3 if item in inflows.tolist() and item not in newLakeLinks else 2 for item in Lake_LinksList2]   # Append Default LINK_TYPE (2) for all items in the Lake_LinksList
         Lake_Link_Type_local = [3 if item in inflows.tolist() else 2 for item in Lake_LinksList2]   # Append Default LINK_TYPE (2) for all items in the Lake_LinksList
 
-
         # Added 12/30/2019 to avoid situations with no upstream or downstream links
         if len(ups) == 0:
             changes = 0
@@ -3449,11 +3455,20 @@ def Lake_Link_Type(arcpy, FLWBarr, FromComIDs, FLarr, subset=None, LakeAssociati
         if debug:
             printMessages(arcpy, ['        Accum1_local: {0}'.format(Accum1_local)])
             printMessages(arcpy, ['        Accum2_local: {0}'.format(Accum2_local)])
+            printMessages(arcpy, ['SegVals2.keys(): {0}'.format(SegVals2.keys())])
 
         # Are there multiple outflows? If so, remove all networks contributing to minor outlets
         # Note that this method only chooses the first link ID if multiple links have the same maximum accumulation value
-        maxflow = SegVals2.keys()[SegVals2.values().index(max(SegVals2.values()))]  # Find the flowline COMID with the highest accumulation value
+        #maxflow = SegVals2.keys()[list(SegVals2.values()).index(max(SegVals2.values()))]  # Find the flowline COMID with the highest accumulation value
+        maxflow = list(SegVals2)[list(SegVals2.values()).index(max(list(SegVals2.values())))]  # Find the flowline COMID with the highest accumulation value
+
+        if debug:
+            printMessages(arcpy, ['maxflow: {0}'.format(maxflow)])
+
         outflows = [key for key,val in SegVals2.items() if val > 0]             # All links with accumulation still in them
+        if debug:
+            printMessages(arcpy, ['outflows: {0}'.format(outflows)])
+
         if len(outflows) > 1:
             problem_lakes = set_problem(problem_lakes, LakeID, 'Potentially multiple outlets. Secondary Outlets: {0}'.format(outflows))
             if debug:

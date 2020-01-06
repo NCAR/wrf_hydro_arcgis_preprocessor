@@ -338,6 +338,7 @@ class ProcessGeogridFile(object):
 
         # Step 1 - Georeference geogrid file
         rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
+        rootgrp.set_auto_mask(False)                                            # Change masked arrays to old default (numpy arrays always returned)
         coarse_grid = wrfh.WRF_Hydro_Grid(arcpy, rootgrp)                       # Instantiate a grid object
         fine_grid = copy.copy(coarse_grid)                                      # Copy the grid object for modification
         fine_grid.regrid(cellsize)                                              # Regrid to the coarse grid
@@ -1301,7 +1302,7 @@ class Lake_Parameter_Addition(object):
             arcpy.AddMessage('You will have to delete this yourself after closing ArcGIS applications.')
         del projdir
         return
-      
+
 class GWBUCKPARM(object):
 
     """This function will build a GWBUCKPARM table out of a variety of inputs."""
