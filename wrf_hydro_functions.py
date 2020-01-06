@@ -30,6 +30,7 @@ import collections                                                              
 # --- End Import Modules --- #
 
 # --- Module Configurations --- #
+from arcpy.sa import *
 sys.dont_write_bytecode = True                                                  # Do not write compiled (.pyc) files
 # --- End Module Configurations --- #
 
