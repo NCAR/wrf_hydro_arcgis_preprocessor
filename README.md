@@ -1,4 +1,5 @@
-# wrf_hydro_arcgis_preprocessor
+#  WRF-Hydro ArcGIS Pre-processor <img src="https://ral.ucar.edu/sites/default/files/public/wrf_hydro_symbol_logo_2017_09_150pxby63px.png" width=100 align="left" />
+
 ARC-GIS TOOLS FOR PREPARING WRF-HYDRO ROUTING GRIDS
 
 These tools are designed to help WRF-Hydro users create surface input data for WRF-Hydro. Presently these tools consist of scripts for use with the ArcGIS Geographical Information System. This is a stand-alone set of scripts which ArcGIS users can install and run locally on their own systems.  ArcGIS is a licensed and proprietary piece of software and we recognize that not all WRF-Hydro users will have access to it.
