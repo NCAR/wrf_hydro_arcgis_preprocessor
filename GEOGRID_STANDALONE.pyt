@@ -19,6 +19,7 @@ import netCDF4                                                                  
 import re                                                                       # Added 10/11/2016 for string matching in netCDF global attributes
 import importlib
 import copy                                                                     # Added 11/19/2019 to allow copying of class objects
+from distutils.version import StrictVersion, LooseVersion
 
 # Test current version of Python's ability to reload a module
 # https://stackoverflow.com/questions/961162/reloading-module-giving-nameerror-name-reload-is-not-defined
@@ -26,9 +27,13 @@ try:
     reload  # Python 2.7
 except NameError:
     try:
-        from importlib import reload  # Python 3.4+
+        from importlib import reload    # Python 3.4+
     except ImportError:
-        from imp import reload  # Python 3.0 - 3.3
+        from imp import reload          # Python 3.0 - 3.3
+
+### Test if the packaging module is installed:
+##if sys.version_info[0] >= 3:
+##    from packaging import version
 
 # Specify import path and append to PATH
 configfile = '~/wrf_hydro_functions.py'
@@ -338,7 +343,8 @@ class ProcessGeogridFile(object):
 
         # Step 1 - Georeference geogrid file
         rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
-        rootgrp.set_auto_mask(False)                                            # Change masked arrays to old default (numpy arrays always returned)
+        if LooseVersion(netCDF4.__version__) > LooseVersion('1.4.0'):
+            rootgrp.set_auto_mask(False)                                        # Change masked arrays to old default (numpy arrays always returned)
         coarse_grid = wrfh.WRF_Hydro_Grid(arcpy, rootgrp)                       # Instantiate a grid object
         fine_grid = copy.copy(coarse_grid)                                      # Copy the grid object for modification
         fine_grid.regrid(cellsize)                                              # Regrid to the coarse grid
@@ -519,6 +525,8 @@ class ExportGrid(object):
 
         # Step 1 - Georeference geogrid file
         rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
+        if LooseVersion(netCDF4.__version__) > LooseVersion('1.4.0'):
+            rootgrp.set_auto_mask(False)                                        # Change masked arrays to old default (numpy arrays always returned)
         coarse_grid = wrfh.WRF_Hydro_Grid(arcpy, rootgrp)                       # Instantiate a grid object
         nc_raster = coarse_grid.numpy_to_Raster(arcpy, wrfh.flip_grid(rootgrp.variables[Variable][0]))
 
@@ -911,6 +919,8 @@ class SpatialMetadataFile(object):
 
         # Georeference geogrid file
         rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
+        if LooseVersion(netCDF4.__version__) > LooseVersion('1.4.0'):
+            rootgrp.set_auto_mask(False)                                        # Change masked arrays to old default (numpy arrays always returned)
         coarse_grid = wrfh.WRF_Hydro_Grid(arcpy, rootgrp)                       # Instantiate a grid object
 
         # Record GEOGRID MAP_PROJ attribute

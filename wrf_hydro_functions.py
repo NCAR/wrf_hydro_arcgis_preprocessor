@@ -1678,13 +1678,17 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
     the Route_Link.nc table and Streams.shp shapefiles in the output directory."""
 
     # Stackless topological sort algorithm, adapted from: http://stackoverflow.com/questions/15038876/topological-sort-python
-    def sort_topologically_stackless(graph):
+    def sort_topologically_stackless(graph, reverse=False):
 
         '''This function will navigate through the list of segments until all are accounted
         for. The result is a sorted list of which stream segments should be listed
         first. Simply provide a topology dictionary {Fromnode:[ToNode,...]} and a sorted list
         is produced that will provide the order for navigating downstream. This version
-        is "stackless", meaning it will not hit the recursion limit of 1000.'''
+        is "stackless", meaning it will not hit the recursion limit of 1000.
+
+        1/16/2020: added parameter "reverse" with a default of False. If True, this
+        function will provide a topological sort where traversing the list in ascending
+        order will encounter elements from downstream to upstream.'''
 
         levels_by_name = {}
         names_by_level = defaultdict(set)
@@ -1706,7 +1710,6 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
                     continue
 
                 children = graph[name]
-
                 children_not_calculated = [child for child in children if child not in levels_by_name]
                 if children_not_calculated:
                     stack.append(name)
@@ -1720,7 +1723,10 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
             walk_depth_first(name)
 
         list1 = list(takewhile(lambda x: x is not None, (names_by_level.get(i, None) for i in count())))
-        list2 = [item for sublist in list1 for item in sublist][::-1]               # Added by KMS 9/2/2015 to reverse sort the list
+        if reverse:
+            list2 = [item for sublist in list1 for item in sublist]
+        else:
+            list2 = [item for sublist in list1 for item in sublist][::-1]               # Added by KMS 9/2/2015 to reverse sort the list
         list3 = [x for x in list2 if x is not None]                                 # Remove None values from list
         return list3
 
@@ -1894,7 +1900,10 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
     whereclause = "%s > 1" %arcpy.AddFieldDelimiters(outStreams, "Order_")
     Straglers = [row[0] for row in arcpy.da.SearchCursor(outStreams, 'ARCID', whereclause) if Arc_To_From.get(row[0]) is None]    # These are not picked up by the other method
     tic2 = time.time()
-    order = sort_topologically_stackless({item:[From_Arc.get(From_To2[Arc_From[item]])] for item in Arc_From})    # 'order' variable is a list of LINK IDs that have been reordered according to a simple topological sort
+    if not Lakes:
+        order = sort_topologically_stackless({item:[From_Arc.get(From_To2[Arc_From[item]])] for item in Arc_From}, reverse=False)    # 'order' variable is a list of LINK IDs that have been reordered according to a simple topological sort
+    else:
+        order = sort_topologically_stackless({item:[From_Arc.get(From_To2[Arc_From[item]])] for item in Arc_From}, reverse=True)    # 'order' variable is a list of LINK IDs that have been reordered according to a simple topological sort
     printMessages(arcpy, ['        Time elapsed for sorting: {0:3.2f}s'.format(time.time()-tic2)])
 
     # Fix Streams shapefile from "FROM_NODE" and "TO_NODE" to "FROM_ARCID" and "TO_ARCID"
@@ -1913,7 +1922,8 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
             cursor.updateRow(row)
     arcpy.DeleteField_management(outStreams, ['FROM_NODE', 'TO_NODE'])          # Delete node-based fields
 
-    ToSeg = {Arc_To_From[arcid]:Arc_From_To[arcid] for arcid in order}
+    # Derive the topology dictionary necessary for routing
+    ToSeg = {arcid:Arc_From_To.get(arcid) for arcid in order}                   # 1/16/20 - This might fix a downstream topology issue.
 
     # Make call to Lake module
     if Lakes is not None:
@@ -2053,7 +2063,7 @@ def build_LAKEPARM_ascii(LakeTBL, min_elevs, areas, max_elevs, OrificEs, cen_lat
     '''
 
     # Create .TBL output table (ASCII)
-    with open(LakeTBL, 'wb') as fp:
+    with open(LakeTBL, 'w') as fp:
         a = csv.writer(fp, dialect='excel-tab', quoting=csv.QUOTE_NONE)
         #a.writerow(['lake', 'LkArea', 'LkMxH', 'WeirC', 'WeirL', 'OrificeC', 'OrificeA', 'OrificeE', 'lat', 'long', 'elevation', 'WeirH']) #
         for lkid in list(min_elevs.keys()):
@@ -2084,7 +2094,7 @@ def build_lake_FC(arcpy, Waterbody, Old_New_LakeComID, Lake_List=[], LkID=defaul
     # Check if there was any merging of the lakes
     origIDs = Old_New_LakeComID.keys()                                          # Isolate list of unique original lake IDs
     newIDs = Old_New_LakeComID.values()                                         # Isolate list of unique new lake IDs
-    if origIDs.sort == newIDs.sort and inLakeList.sort == Lake_List.sort:
+    if sorted(origIDs) == sorted(newIDs) and sorted(inLakeList) == sorted(Lake_List):
         printMessages(arcpy, ['    The lists are identical. No need to create a new lake feature class.'])
     else:
         printMessages(arcpy, ['    There were changes made to the input lakes. Writing feature class of merged lakes.'])
@@ -2100,7 +2110,7 @@ def build_lake_FC(arcpy, Waterbody, Old_New_LakeComID, Lake_List=[], LkID=defaul
                     row[0] = Lake
                     cursor.updateRow(row)
 
-    if origIDs.sort != newIDs.sort:
+    if sorted(origIDs) != sorted(newIDs):
         # Dissolve to get new lake polygons
         arcpy.Delete_management(Waterbody)                                      # Delete the existing layer in order to replace it
         arcpy.Dissolve_management(InLakes, Waterbody, LkID)                     # Dissolve the layer based on the lake ID. May create multipart features
@@ -2244,7 +2254,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
         printMessages(arcpy, ['    Found {0} lakes with no elevation range. Providing minimum depth of {1}m for these lakes.'.format(len(noDepthLks), minDepth)])
         min_elevs.update({key:max_elevs[key]-minDepth for key, val in noDepthLks.items() if val == 0}) # Give these lakes a minimum depth
         noDepthFile = os.path.join(projdir, 'Lakes_with_minimum_depth.csv')
-        with open(noDepthFile, 'wb') as f:
+        with open(noDepthFile, 'w') as f:
             w = csv.writer(f)
             w.writerow([lakeID, "original_depth"])
             w.writerows(list(noDepthLks.items()))
@@ -3321,10 +3331,7 @@ def Lake_Link_Type(arcpy, FLWBarr, FromComIDs, FLarr, subset=None, LakeAssociati
 
     # Construct an array to store the Lake COMID and Minimum Hydrosequence
     dtype = dict(names=(FLID, 'minHydroSeq'), formats=('<i4', '<f8'))
-    printMessages(arcpy, ['group_minDict: {0}'.format(group_minDict)])
     LakeSeq = numpy.array(list(group_minDict.items()), dtype=dtype)             # Create array of minimum HydroSeq values for each lake
-    #LakeSeq = numpy.array([(group, minimum) for group, minimum in group_minDict.items()], dtype=dtype)  # Create array of minimum HydroSeq values for each lake
-    printMessages(arcpy, ['LakeSeq: {0}'.format(LakeSeq)])
     del group_minDict, dtype                                                    # Free up memory
     LakeSeq = LakeSeq[LakeSeq[FLID]>-9998]                                      # Clip off -9999, -9998
     LakeSeq.sort(order='minHydroSeq')                                           # Sort by minimum HydroSeq
@@ -3617,14 +3624,14 @@ def LK_main(arcpy, outDir, Flowline, Waterbody, FromComIDs, order, fields, Subse
     # Write the lake problem file to a CSV format file
     LakeProblemFile = os.path.join(outDir, 'Lake_Problems.csv')
     printMessages(arcpy, ['      Writing Lake_Problems dictionary to file: {0}'.format(LakeProblemFile)])
-    with open(LakeProblemFile,'wb') as f:
+    with open(LakeProblemFile,'w') as f:
         w = csv.writer(f)
         w.writerows(problem_lakes.items())
 
     # Write the dictionary to disk as CSV file that shows which lakes have been merged (added 1/16/2017)
     Old_New_LakeComIDFile = os.path.join(outDir, 'Old_New_LakeComIDs.csv')
     printMessages(arcpy, ['      Writing Lake merging dictionary to file: {0}'.format(Old_New_LakeComIDFile)])
-    with open(Old_New_LakeComIDFile,'wb') as f:
+    with open(Old_New_LakeComIDFile,'w') as f:
         w = csv.writer(f)
         w.writerows(Old_New_LakeComID.items())
 
