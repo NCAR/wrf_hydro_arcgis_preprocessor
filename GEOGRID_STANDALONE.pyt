@@ -97,6 +97,13 @@ in_GWPolys = None                                                               
 # Methods test switches
 coordMethod1 = True                                                             # Interpolate GEOGRID latitude and longitude coordinate arrays
 coordMethod2 = False                                                            # Transform coordinate pairs at each grid cell from projected to geocentric
+
+# Spatial Metadata
+
+# Adding global attributes from the GEOGRID file to the Spatial Metadata files and
+# to the Fulldom file can be useful, because then those files can be used as input
+# to other GIS tools, without requiring a WPS GEOGRID file.
+Globals_to_Add = ['MAP_PROJ', 'corner_lats', 'corner_lons', 'TRUELAT1', 'TRUELAT2', 'STAND_LON', 'POLE_LAT', 'POLE_LON', 'MOAD_CEN_LAT', 'CEN_LAT']
 # --- End Globals --- #
 
 # --- Toolbox Classes --- #
@@ -343,6 +350,7 @@ class ProcessGeogridFile(object):
 
         # Step 1 - Georeference geogrid file
         rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
+        globalAtts = rootgrp.__dict__                                           # Read all global attributes into a dictionary
         if LooseVersion(netCDF4.__version__) > LooseVersion('1.4.0'):
             rootgrp.set_auto_mask(False)                                        # Change masked arrays to old default (numpy arrays always returned)
         coarse_grid = wrfh.WRF_Hydro_Grid(arcpy, rootgrp)                       # Instantiate a grid object
@@ -360,6 +368,9 @@ class ProcessGeogridFile(object):
         rootgrp1 = netCDF4.Dataset(out_nc1, 'w', format=outNCType)              # wrfh.outNCType)
         rootgrp1 = wrfh.create_CF_NetCDF(arcpy, coarse_grid, rootgrp1, addLatLon=False, notes=processing_notes_SM)
         rootgrp1.proj4 = coarse_grid.proj4                                      # Add proj.4 string as a global attribute
+        for item in Globals_to_Add + ['DX', 'DY']:
+            if item in globalAtts:
+                rootgrp1.setncattr(item, globalAtts[item])
         rootgrp1.close()
         del rootgrp1
 
@@ -384,8 +395,7 @@ class ProcessGeogridFile(object):
         rootgrp2.proj4 = fine_grid.proj4                                        # Add proj.4 string as a global attribute
         rootgrp2.DX = fine_grid.DX                                              # Add X resolution as a global attribute
         rootgrp2.DY = fine_grid.DY                                              # Add Y resolution as a global attribute
-        globalAtts = rootgrp.__dict__                                           # Read all global attributes into a dictionary
-        for item in ['MAP_PROJ', 'corner_lats', 'corner_lons', 'TRUELAT1', 'TRUELAT2', 'STAND_LON', 'POLE_LAT', 'POLE_LON', 'MOAD_CEN_LAT', 'CEN_LAT']:
+        for item in Globals_to_Add:
             if item in globalAtts:
                 rootgrp2.setncattr(item, globalAtts[item])
         rootgrp.close()
@@ -919,6 +929,7 @@ class SpatialMetadataFile(object):
 
         # Georeference geogrid file
         rootgrp = netCDF4.Dataset(in_nc, 'r')                                   # Establish an object for reading the input NetCDF files
+        globalAtts = rootgrp.__dict__                                           # Read all global attributes into a dictionary
         if LooseVersion(netCDF4.__version__) > LooseVersion('1.4.0'):
             rootgrp.set_auto_mask(False)                                        # Change masked arrays to old default (numpy arrays always returned)
         coarse_grid = wrfh.WRF_Hydro_Grid(arcpy, rootgrp)                       # Instantiate a grid object
@@ -951,6 +962,9 @@ class SpatialMetadataFile(object):
         rootgrp = netCDF4.Dataset(out_nc, 'w', format=outNCType)
         rootgrp = wrfh.create_CF_NetCDF(arcpy, grid_obj, rootgrp, addLatLon=latlon_vars,
             notes=processing_notes_SM, latArr=latArr, lonArr=lonArr)
+        for item in Globals_to_Add + ['DX', 'DY']:
+            if item in globalAtts:
+                rootgrp.setncattr(item, globalAtts[item])
         rootgrp.close()
         wrfh.printMessages(arcpy, ['Completed without error in {0} seconds.'.format(time.time()-tic1)])
         tee.close()

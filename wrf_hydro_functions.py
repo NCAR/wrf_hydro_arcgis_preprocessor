@@ -127,7 +127,7 @@ n = 0.035                                                                       
 ChSlp = 0.05                                                                    # Channel Side Slope (%; drop/length)
 BtmWdth = 5                                                                     # Bottom Width of Channel (m)
 Kc = 0                                                                          # channel conductivity (mm/hour)
-maskRL = False                                                                  # Allow masking of channels in RouteLink file. May cause WRF-Hydro to crash if True
+maskRL = False                                                                  # Allow masking of channels in RouteLink file. May cause WRF-Hydro to crash if True. This will also mask GWBASINS grid.
 Streams_addFields = ['link', 'to', 'gages', 'Lake']                             # Variables from RouteLink file to add to the output stream shapefile (for convenience, plotting in GIS)
 ###################################################
 
@@ -151,6 +151,7 @@ zmax = 50.00                                                                    
 zinit = 10.0000                                                                 # Initial depth of water in the bucket model
 out_2Dtype = ['nc']                                                             # Default output 2D groundwater bucket grid format: ['nc', 'ascii']
 out_1Dtype = '.nc'                                                              # Default output 1D groundwater parameter (GWBUCKPARM.nc) format: ['.nc', '.nc and .TBL', '.TBL']
+maskGW_Basins = False                                                           # Option to mask the GWBASINS.nc grid to only active channels
 ###################################################
 
 ###################################################
@@ -2548,14 +2549,11 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
         if in_method == 'FullDom basn_msk variable':
 
             # Create a raster layer from the netCDF
-            #GWBasns = arcpy.NumPyArrayToRaster(numpy.array(rootgrp1.variables['basn_msk'][:]), point, grid_obj.DX, grid_obj.DY)
             GWBasns = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables['basn_msk'][:]))
             arcpy.CalculateStatistics_management(GWBasns)
-            #arcpy.DefineProjection_management(GWBasns, sr)
 
             # Gather projection and set output coordinate system
             descData = arcpy.Describe(GWBasns)
-            #sr = descData.spatialReference
             arcpy.env.outputCoordinateSystem = sr
 
         elif in_method == 'FullDom LINKID local basins':
@@ -2575,7 +2573,11 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
                     arcpy.CalculateStatistics_management(nc_raster)
                     arcpy.env.snapRaster = nc_raster
                     if ncvarname == 'CHANNELGRID':
-                        chgrid = SetNull(nc_raster, '1', 'VALUE < 0')
+                        if maskGW_Basins:
+                            nullExp = 'VALUE < 0'
+                        else:
+                            nullExp = 'VALUE < -1'
+                        chgrid = SetNull(nc_raster, '1', nullExp)
                     elif ncvarname == 'FLOWDIRECTION':
                         fdir = Int(nc_raster)
 
@@ -2608,7 +2610,6 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
                 strm.save(os.path.join('in_memory', 'LINKID'))
                 arcpy.Delete_management(outStreams_)
                 arcpy.Delete_management(chgrid)
-                #arcpy.Delete_management(outRaster)
                 del chgrid, maxValue, maxRasterValue, outStreams_    # outRaster
 
             else:
@@ -2932,7 +2933,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
         if in_csv is None:                                                      # Added 10/10/2017 by KMS to include forecast points in reach-based routing file
             frxst_raster = None                                                 # Default is no forecast points for reach-based routing file
         elif maskRL:
-            rasterExp = "Value < 0"                                             # Only channels within the masked basin will be in reach-based routing file
+            rasterExp = 'VALUE < 0'                                             # Only channels within the masked basin will be in reach-based routing file
         strm2 = SetNull(channelgrid, channelgrid, rasterExp)                    # Alter channelgrid such that -9999 and -1 to be NoData
         linkid = Routing_Table(arcpy, projdir, sr2, strm2, fdir, fill2, order2, gages=frxst_raster, Lakes=in_lakes)
         linkid_var = rootgrp.variables['LINKID']
