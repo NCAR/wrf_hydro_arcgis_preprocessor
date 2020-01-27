@@ -1532,7 +1532,8 @@ def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, in_rast
     # Use extent of channelgrid raster to add a feature layer of lake polygons
     outshp = os.path.join(outDir, TempLakeFIle)
     arcpy.CopyFeatures_management(WB, outshp)
-    lakeID = assign_lake_IDs(arcpy, outshp, lakeIDfield=defaultLakeID)
+    lakeID = assign_lake_IDs(arcpy, outshp)
+    #lakeID = assign_lake_IDs(arcpy, outshp, lakeIDfield=defaultLakeID)
 
     #arcpy.AddField_management(FL, lakeID, "SHORT")
     dtypes = numpy.dtype([(FLID, 'i4'), (hydroSeq, 'i4')])           # Create a numpy dtype object
