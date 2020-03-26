@@ -32,6 +32,8 @@ except ImportError: # will be 3.x series
 # Pure python method of getting unique sums - from http://stackoverflow.com/questions/4373631/sum-array-by-number-in-numpy
 from operator import itemgetter                                                 # Used in the group_min function
 import collections                                                              # Used in the group_min function
+
+from distutils.version import StrictVersion, LooseVersion
 # --- End Import Modules --- #
 
 # --- Module Configurations --- #
@@ -138,6 +140,7 @@ OrificA = 1.0
 WeirC = 0.4
 WeirL = 10.0                                                                    # New default prescribed by D. Yates 5/11/2017 (10m default weir length). Old default weir length (0.0m).
 ifd_Val = 0.90                                                                  # Default initial fraction water depth (90%)
+#dam_length = 10.0                                                               # Default length of the dam                                                                                                            
 out_LKtype = ['nc']                                                             # Default output lake parameter file format ['nc', 'ascii']
 defaultLakeID = "NEWID"                                                         # Default new LakeID field for lakes, numbered 1..n
 Lakes_addFields = ['lake_id']                                                   # Variables from LAKEPARM file to add to the output lake shapefile (for convenience, plotting in GIS)
@@ -379,7 +382,7 @@ class WRF_Hydro_Grid:
                                  'PARAMETER["Scale_Factor",' + str(central_scale_factor) + '],'
                                  'PARAMETER["Latitude_Of_Origin",' + str(standard_parallel_1) + '],'
                                  'UNIT["Meter",1.0]]')
-            proj4 = ("+proj=stere +units=meters +a={} +b={} +lat0={} +lon_0={} +lat_ts={}".format(
+            proj4 = ("+proj=stere +units=m +a={} +b={} +lat0={} +lon_0={} +lat_ts={}".format(
                 str(sphere_radius),
                 str(sphere_radius),
 				str(pole_latitude),
@@ -400,7 +403,7 @@ class WRF_Hydro_Grid:
                                  'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
                                  'PARAMETER["Standard_Parallel_1",' + str(standard_parallel_1) + '],'
                                  'UNIT["Meter",1.0]]')
-            proj4 = ("+proj=merc +units=meters +a={} +b={} +lon_0={} +lat_ts={}".format(
+            proj4 = ("+proj=merc +units=m +a={} +b={} +lon_0={} +lat_ts={}".format(
                 str(sphere_radius),
 				str(sphere_radius),
 				str(central_meridian),
@@ -433,7 +436,7 @@ class WRF_Hydro_Grid:
                                      'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
                                      'PARAMETER["Standard_Parallel_1",' + str(standard_parallel_1) + '],'
                                      'UNIT["Meter",1.0]]')                          # 'UNIT["Degree", 1.0]]') # ?? For lat-lon grid?
-                proj4 = ("+proj=eqc +units=meters +a={} +b={} +lon_0={}".format(str(sphere_radius), str(sphere_radius), str(central_meridian)))
+                proj4 = ("+proj=eqc +units=m +a={} +b={} +lon_0={}".format(str(sphere_radius), str(sphere_radius), str(central_meridian)))
 
         # Create a point geometry object from gathered corner point data
         sr2.loadFromString(Projection_String)
@@ -758,6 +761,8 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
 
                 # Establish an object for reading the input NetCDF file
                 rootgrp = netCDF4.Dataset(infile, 'r')
+                if LooseVersion(netCDF4.__version__) > LooseVersion('1.4.0'):
+                    rootgrp.set_auto_mask(False)                                        # Change masked arrays to old default (numpy arrays always returned)
 
                 # Using netCDF4 library - still need point2, DX, DY
                 GT = rootgrp.variables[crsVar].GeoTransform.split(" ")
@@ -779,9 +784,10 @@ def Examine_Outputs(arcpy, in_zip, out_folder, skipfiles=[]):
                         outRasterLayer = variablename
                         outArr = numpy.array(ncvar[:])
                         nc_raster = arcpy.NumPyArrayToRaster(outArr, point, DX, DY)
-                        arcpy.CalculateStatistics_management(nc_raster)
-                        arcpy.DefineProjection_management(nc_raster, sr)
-                        nc_raster.save(os.path.join(out_folder, outRasterLayer))
+                        outRasterFile = os.path.join(out_folder, outRasterLayer)
+                        nc_raster.save(outRasterFile)
+                        arcpy.CalculateStatistics_management(outRasterFile)
+                        arcpy.DefineProjection_management(outRasterFile, sr)
                         printMessages(arcpy, ['  File Created: {0}'.format(outRasterLayer)])
                         del nc_raster, variablename, outRasterLayer
                 rootgrp.close()
@@ -1532,8 +1538,7 @@ def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, in_rast
     # Use extent of channelgrid raster to add a feature layer of lake polygons
     outshp = os.path.join(outDir, TempLakeFIle)
     arcpy.CopyFeatures_management(WB, outshp)
-    lakeID = assign_lake_IDs(arcpy, outshp)
-    #lakeID = assign_lake_IDs(arcpy, outshp, lakeIDfield=defaultLakeID)
+    lakeID = assign_lake_IDs(arcpy, outshp, lakeIDfield=defaultLakeID)
 
     #arcpy.AddField_management(FL, lakeID, "SHORT")
     dtypes = numpy.dtype([(FLID, 'i4'), (hydroSeq, 'i4')])           # Create a numpy dtype object
@@ -1994,6 +1999,7 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     WeirEs = rootgrp.createVariable('WeirE', 'f8', (dim1))                      # Variable (64-bit floating point)
     AscendOrder = rootgrp.createVariable('ascendingIndex', 'i4', (dim1))        # Variable (32-bit signed integer)
     ifd = rootgrp.createVariable('ifd', 'f4', (dim1))                           # Variable (32-bit floating point)
+    #Dam = rootgrp.createVariable('Dam_Length', 'i4', (dim1))                    # Variable (32-bit signed integer)                                                                                                               
 
     # Add CF-compliant coordinate system variable
     if pointCF:
@@ -2025,6 +2031,8 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     Times.units = 'days since 2000-01-01 00:00:00'                              # For compliance. Reference time arbitrary
     WeirEs.units = 'm'
     ids.cf_role = "timeseries_id"                                               # For compliance
+    #Dam.long_name = 'Length of the dam'
+    #Dam.units = 'Meters'
 
     # Apply grid_mapping and coordinates attributes to all variables
     for varname, ncVar in rootgrp.variables.items():
@@ -2052,6 +2060,7 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     longs[:] = numpy.array([cen_lons[lkid] for lkid in min_elev_keys])
     WeirEs[:] = numpy.array([WeirE_vals[lkid] for lkid in min_elev_keys])    # WierH is 0.9 of the distance between the low elevation and max lake elevation
     ifd[:] = ifd_Val
+    #Dam[:] = dam_length                    
 
     # Close file
     rootgrp.close()
@@ -2540,10 +2549,17 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
     arcpy.env.overwriteOutput = True
     arcpy.env.workspace = projdir
     arcpy.env.scratchWorkspace = projdir
+    arcpy.env.cellSize = grid_obj.DX
     sr = grid_obj.proj
+
+    # Select a location to store outputs
+    #scratchdir = projdir
+    scratchdir = 'in_memory'
 
     # Open input FullDom file
     rootgrp1 = netCDF4.Dataset(in_nc, 'r')                                      # Read-only on FullDom file
+    if LooseVersion(netCDF4.__version__) > LooseVersion('1.4.0'):
+        rootgrp1.set_auto_mask(False)                                        # Change masked arrays to old default (numpy arrays always returned)
 
     try:
         # Determine which method will be used to generate groundwater bucket grid
@@ -2563,14 +2579,14 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
                 printMessages(arcpy, ['    Generating LINKID grid from CHANNELGRID and FLOWDIRECTION'])
 
                 # In-memory files
-                outStreams_ = r'in_memory\Streams'
-                outRaster = r'in_memory\LINKID'
+                outStreams_ = os.path.join(scratchdir, 'Streams')
+                outRaster = os.path.join(scratchdir, 'LINKID')
 
                 # Read Fulldom file variable to raster layer
                 for ncvarname in ['CHANNELGRID', 'FLOWDIRECTION']:
                     printMessages(arcpy, ['    Creating layer from netCDF variable {0}'.format(ncvarname)])
                     nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables[ncvarname][:]))
-                    nc_raster.save(os.path.join('in_memory', ncvarname))
+                    nc_raster.save(os.path.join(scratchdir, ncvarname))
                     arcpy.CalculateStatistics_management(nc_raster)
                     arcpy.env.snapRaster = nc_raster
                     if ncvarname == 'CHANNELGRID':
@@ -2591,7 +2607,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
 
                 # Convert to stream features, then back to raster
                 StreamToFeature(chgrid, fdir, outStreams_, "NO_SIMPLIFY")            # Stream to feature
-                if ArcVersionF >= 10.5:
+                if ArcVersionF >= 10.5 or ArcVersionF < 3.0:
                     arcidField = 'arcid'
                 else:
                     arcidField = 'ARCID'
@@ -2608,7 +2624,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
 
                 printMessages(arcpy, ['    Creating StreamLink grid'])
                 strm = SetNull(outRaster, outRaster, "VALUE = %s" %NoDataVal)
-                strm.save(os.path.join('in_memory', 'LINKID'))
+                strm.save(os.path.join(scratchdir, 'LINKID'))
                 arcpy.Delete_management(outStreams_)
                 arcpy.Delete_management(chgrid)
                 del chgrid, maxValue, maxRasterValue, outStreams_    # outRaster
@@ -2617,12 +2633,12 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
                 printMessages(arcpy, ['    LINKID exists in FullDom file.'])
                 for ncvarname in ['LINKID', 'FLOWDIRECTION']:
                     nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables[ncvarname][:]))
-                    nc_raster.save(os.path.join('in_memory', ncvarname))
+                    nc_raster.save(os.path.join(scratchdir, ncvarname))
                     arcpy.CalculateStatistics_management(nc_raster)
                     arcpy.env.snapRaster = nc_raster
                     if ncvarname == 'LINKID':
                         strm = SetNull(nc_raster, nc_raster, 'VALUE = %s' %NoDataVal)
-                        strm.save(os.path.join('in_memory', 'strm'))
+                        strm.save(os.path.join(scratchdir, 'strm'))
                     elif ncvarname == 'FLOWDIRECTION':
                         fdir = Int(nc_raster)
 
@@ -2633,6 +2649,7 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
 
             # Create contributing watershed grid
             GWBasns = Watershed(fdir, strm, 'VALUE')
+            GWBasns.save(os.path.join(scratchdir, 'gw_basns2'))
             arcpy.Delete_management(strm)
             arcpy.Delete_management(fdir)
             arcpy.Delete_management(nc_raster)
@@ -2650,11 +2667,10 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
             arcpy.env.outputCoordinateSystem = sr
             arcpy.env.snapRaster = nc_raster
             arcpy.env.extent = nc_raster
-            arcpy.env.cellSize = grid_obj.DX                                               # Set cellsize to fine grid
 
             # Resolve basins on the fine grid
             descData = arcpy.Describe(in_Polys)
-            GWBasnsFile = os.path.join('in_memory', 'poly_basins')
+            GWBasnsFile = os.path.join(scratchdir, 'poly_basins')
             arcpy.PolygonToRaster_conversion(in_Polys, descData.OIDFieldName, GWBasnsFile, "MAXIMUM_AREA", "", grid_obj.DX)
             GWBasns = arcpy.Raster(GWBasnsFile)                                 # Create raster object from raster layer
             arcpy.Delete_management(nc_raster)
