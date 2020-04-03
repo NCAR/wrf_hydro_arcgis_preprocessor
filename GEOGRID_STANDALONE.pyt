@@ -19,7 +19,7 @@ import netCDF4                                                                  
 import re                                                                       # Added 10/11/2016 for string matching in netCDF global attributes
 import importlib
 import copy                                                                     # Added 11/19/2019 to allow copying of class objects
-from distutils.version import StrictVersion, LooseVersion
+from distutils.version import LooseVersion
 
 # Test current version of Python's ability to reload a module
 # https://stackoverflow.com/questions/961162/reloading-module-giving-nameerror-name-reload-is-not-defined

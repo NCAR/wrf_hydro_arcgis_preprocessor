@@ -140,7 +140,7 @@ OrificA = 1.0
 WeirC = 0.4
 WeirL = 10.0                                                                    # New default prescribed by D. Yates 5/11/2017 (10m default weir length). Old default weir length (0.0m).
 ifd_Val = 0.90                                                                  # Default initial fraction water depth (90%)
-#dam_length = 10.0                                                               # Default length of the dam                                                                                                            
+#dam_length = 10.0                                                               # Default length of the dam
 out_LKtype = ['nc']                                                             # Default output lake parameter file format ['nc', 'ascii']
 defaultLakeID = "NEWID"                                                         # Default new LakeID field for lakes, numbered 1..n
 Lakes_addFields = ['lake_id']                                                   # Variables from LAKEPARM file to add to the output lake shapefile (for convenience, plotting in GIS)
@@ -354,34 +354,54 @@ class WRF_Hydro_Grid:
         elif map_pro == 2:
             # Polar Stereographic
 
-            # Set up pole latitude
-            phi1 = float(standard_parallel_1)
+            ##            # Set up pole latitude
+            ##            phi1 = float(standard_parallel_1)
+            ##
+            ##            ### Back out the central_scale_factor (minimum scale factor?) using formula below using Snyder 1987 p.157 (USGS Paper 1395)
+            ##            ##phi = math.copysign(float(pole_latitude), float(latitude_of_origin))    # Get the sign right for the pole using sign of CEN_LAT (latitude_of_origin)
+            ##            ##central_scale_factor = (1 + (math.sin(math.radians(phi1))*math.sin(math.radians(phi))) + (math.cos(math.radians(float(phi1)))*math.cos(math.radians(phi))))/2
+            ##
+            ##            # Method where central scale factor is k0, Derivation from C. Rollins 2011, equation 1: http://earth-info.nga.mil/GandG/coordsys/polar_stereographic/Polar_Stereo_phi1_from_k0_memo.pdf
+            ##            # Using Rollins 2011 to perform central scale factor calculations. For a sphere, the equation collapses to be much  more compact (e=0, k90=1)
+            ##            central_scale_factor = (1 + math.sin(math.radians(abs(phi1))))/2        # Equation for k0, assumes k90 = 1, e=0. This is a sphere, so no flattening
+            ##
+            ##            # Hardcode in the pole as the latitude of origin (correct assumption?) Added 4/4/2017 by KMS
+            ##            standard_parallel_1 = pole_latitude
+            ##
+            ##            printMessages(arcpy, ['      Central Scale Factor: %s' %central_scale_factor])
+            ##            Projection_String = ('PROJCS["Sphere_Stereographic",'
+            ##                                 'GEOGCS["GCS_Sphere",'
+            ##                                 'DATUM["D_Sphere",'
+            ##                                 'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
+            ##                                 'PRIMEM["Greenwich",0.0],'
+            ##                                 'UNIT["Degree",0.0174532925199433]],'
+            ##                                 'PROJECTION["Stereographic"],'
+            ##                                 'PARAMETER["False_Easting",0.0],'
+            ##                                 'PARAMETER["False_Northing",0.0],'
+            ##                                 'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
+            ##                                 'PARAMETER["Scale_Factor",' + str(central_scale_factor) + '],'
+            ##                                 'PARAMETER["Latitude_Of_Origin",' + str(standard_parallel_1) + '],'
+            ##                                 'UNIT["Meter",1.0]]')
 
-            ### Back out the central_scale_factor (minimum scale factor?) using formula below using Snyder 1987 p.157 (USGS Paper 1395)
-            ##phi = math.copysign(float(pole_latitude), float(latitude_of_origin))    # Get the sign right for the pole using sign of CEN_LAT (latitude_of_origin)
-            ##central_scale_factor = (1 + (math.sin(math.radians(phi1))*math.sin(math.radians(phi))) + (math.cos(math.radians(float(phi1)))*math.cos(math.radians(phi))))/2
-
-            # Method where central scale factor is k0, Derivation from C. Rollins 2011, equation 1: http://earth-info.nga.mil/GandG/coordsys/polar_stereographic/Polar_Stereo_phi1_from_k0_memo.pdf
-            # Using Rollins 2011 to perform central scale factor calculations. For a sphere, the equation collapses to be much  more compact (e=0, k90=1)
-            central_scale_factor = (1 + math.sin(math.radians(abs(phi1))))/2        # Equation for k0, assumes k90 = 1, e=0. This is a sphere, so no flattening
-
-            # Hardcode in the pole as the latitude of origin (correct assumption?) Added 4/4/2017 by KMS
-            standard_parallel_1 = pole_latitude
-
-            printMessages(arcpy, ['      Central Scale Factor: %s' %central_scale_factor])
+            # 3/30/2020: Testing out utility of providing "Stereographic_North_Pole" or "Stereographic_South_Pole"
+            # definitions. However, this may not work for all WRF-supported aspects of stereographic CRS.
+            if pole_latitude > 0:
+                pole_orientation = 'North'
+            else:
+                pole_orientation = 'South'
             Projection_String = ('PROJCS["Sphere_Stereographic",'
-                                 'GEOGCS["GCS_Sphere",'
-                                 'DATUM["D_Sphere",'
-                                 'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
-                                 'PRIMEM["Greenwich",0.0],'
-                                 'UNIT["Degree",0.0174532925199433]],'
-                                 'PROJECTION["Stereographic"],'
-                                 'PARAMETER["False_Easting",0.0],'
-                                 'PARAMETER["False_Northing",0.0],'
-                                 'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
-                                 'PARAMETER["Scale_Factor",' + str(central_scale_factor) + '],'
-                                 'PARAMETER["Latitude_Of_Origin",' + str(standard_parallel_1) + '],'
-                                 'UNIT["Meter",1.0]]')
+                                    'GEOGCS["GCS_Sphere",'
+                                    'DATUM["D_Sphere",'
+                                    'SPHEROID["Sphere",' + str(sphere_radius) + ',0.0]],'
+                                    'PRIMEM["Greenwich",0.0],'
+                                    'UNIT["Degree",0.0174532925199433]],'
+                                    'PROJECTION["Stereographic_' + pole_orientation + '_Pole"],'
+                                    'PARAMETER["False_Easting",0.0],'
+                                    'PARAMETER["False_Northing",0.0],'
+                                    'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
+                                    'PARAMETER["standard_parallel_1",' + str(standard_parallel_1) + '],'
+                                    'UNIT["Meter",1.0]]')
+
             proj4 = ("+proj=stere +units=m +a={} +b={} +lat0={} +lon_0={} +lat_ts={}".format(
                 str(sphere_radius),
                 str(sphere_radius),
@@ -1062,7 +1082,7 @@ def create_CF_NetCDF(arcpy, grid_obj, rootgrp, addLatLon=False, notes='', addVar
 def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, projdir):
     """
     The second step creates a high resolution topography raster using a hydrologically-
-    corrected elevation dataset (currently either HydroSHEDS or NHDPlusv2).
+    corrected elevation dataset.
 
     Changes made 01/26/2018 allow methods to change depending on the ArcGIS version
     available. A bug in ArcGIS 10.4 and 10.5 (Esri BUG-000096495) prevents a Custom
@@ -1073,6 +1093,11 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
 
     3/28/2018: ArcGIS 10.6 allows custom transformations, but arcpy does not allow
     the custom geotransformation to be specified by name.
+
+    4/1/2020: Added functionality to avoid a geographic transformation if the input
+    DEM is in the same datum as the model grid. This will happen if the user desires
+    to use a WPS-processed grid (such as HGT_M) as the input high resolution elevation
+    raster.
     """
 
     # Get ArcGIS version information and checkout Spatial Analyst extension
@@ -1103,36 +1128,52 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     printMessages(arcpy, ['    The GEOGRID File resolution is {0}sm'.format(str(cellsize1))])
     printMessages(arcpy, ['    The High-resolution dataset will be {0}m'.format(str(cellsize2))])
 
-    # Create a projected boundary polygon of the model domain with which to clip the in_raster
     sr3 = arcpy.Describe(in_raster).spatialReference                            # Obtain the SRS object for the input high-resolution DEM
-    if ArcProduct == 'ArcGISPro':
-        arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
-        printMessages(arcpy, ['    Tranformation: {0}'.format(geoTransfmName)])
-        projpoly = boundaryPolygon.projectAs(sr3)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS using custom geotransformation
-    elif ArcVersionF > 10.3 and ArcVersionF < 10.6:
-        # Create two new geographic coordinate systems; one for projecting the model boundary polygon geometry,
-        #   and one for projecting the input high resolution DEM (in_raster). In each one, the datum from the
-        #   other dataset will be substituted, such that we can perform a 'Null'-like transformation.
-        printMessages(arcpy, ['    WARNING: ArcGIS version {0} detected.  Work-around for ESRI BUG-000096495 being implemented. Check output to ensure proper spatial referencing of topographic features in output data.'.format(ArcVersion)])
-        modelSR_GCS = sr2.GCS.exportToString().split(';')[0]                    # Find the GCS sub-string for the model SRS
-        DEMSR_GCS = sr3.GCS.exportToString().split(';')[0]                      # Find the GCS sub-string for the input high-resolution DEM SRS
-        modelSR2 = sr2.exportToString().replace(modelSR_GCS, DEMSR_GCS)         # Replace the GEOGCS portion to 'fake' a known spheroidal datum
-        DEMSR2 = sr3.exportToString().replace(DEMSR_GCS, modelSR_GCS)           # Replace the GEOGCS portion to 'fake' a known spherical datum
-        sr4 = arcpy.SpatialReference()                                          # Initiate the new SRS
-        sr4.loadFromString(modelSR2)                                            # Load SRS from altered string
-        sr5 = arcpy.SpatialReference()                                          # Initiate the new SRS
-        sr5.loadFromString(DEMSR2)                                              # Load SRS from altered string
-        del modelSR_GCS, DEMSR_GCS, modelSR2, DEMSR2
-        projpoly = boundaryPolygon.projectAs(sr5)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS
-    elif ArcVersionF <= 10.3:
-        arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
-        printMessages(arcpy, ['    Tranformation: {0}'.format(geoTransfmName)])
-        projpoly = boundaryPolygon.projectAs(sr3, geoTransfmName)               # Reproject the boundary polygon from the WRF domain to the input raster CRS using custom geotransformation
-    elif ArcVersionF >= 10.6:
-        # Custom geotransformation appears not to be a valid input to the .projectAs geometry tool in ArcGIS 10.6
-        # However, if you create a custom geotransformation beforehand, then it will be respected bye the projectAs function
-        arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
-        projpoly = boundaryPolygon.projectAs(sr3) # Reproject the boundary polygon from the WRF domain to the input raster CRS
+
+    # --- Experimental Code --- #
+    # Find out if the input and output share a datum, and thus no custom geotransformation is necessary.
+    if sr2.exportToString() == sr3.exportToString():
+    	printMessages(arcpy, ['    The input and output coordinate system are identical. Skipping custom geotransformation step.'])
+    	skip_custom_GT = True
+    elif (sr2.semiMinorAxis == sr3.semiMinorAxis) and (sr2.semiMajorAxis == sr3.semiMajorAxis):
+    	printMessages(arcpy, ['    The input and output share the same datum. Skipping custom geotransformation step.'])
+    	skip_custom_GT = True
+    else:
+    	skip_custom_GT = False
+    # --- Experimental Code --- #
+
+    # Create a projected boundary polygon of the model domain with which to clip the in_raster
+    if not skip_custom_GT:
+        if ArcProduct == 'ArcGISPro':
+            arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
+            printMessages(arcpy, ['    Tranformation: {0}'.format(geoTransfmName)])
+            projpoly = boundaryPolygon.projectAs(sr3)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS using custom geotransformation
+        elif ArcVersionF > 10.3 and ArcVersionF < 10.6:
+            # Create two new geographic coordinate systems; one for projecting the model boundary polygon geometry,
+            #   and one for projecting the input high resolution DEM (in_raster). In each one, the datum from the
+            #   other dataset will be substituted, such that we can perform a 'Null'-like transformation.
+            printMessages(arcpy, ['    WARNING: ArcGIS version {0} detected.  Work-around for ESRI BUG-000096495 being implemented. Check output to ensure proper spatial referencing of topographic features in output data.'.format(ArcVersion)])
+            modelSR_GCS = sr2.GCS.exportToString().split(';')[0]                    # Find the GCS sub-string for the model SRS
+            DEMSR_GCS = sr3.GCS.exportToString().split(';')[0]                      # Find the GCS sub-string for the input high-resolution DEM SRS
+            modelSR2 = sr2.exportToString().replace(modelSR_GCS, DEMSR_GCS)         # Replace the GEOGCS portion to 'fake' a known spheroidal datum
+            DEMSR2 = sr3.exportToString().replace(DEMSR_GCS, modelSR_GCS)           # Replace the GEOGCS portion to 'fake' a known spherical datum
+            sr4 = arcpy.SpatialReference()                                          # Initiate the new SRS
+            sr4.loadFromString(modelSR2)                                            # Load SRS from altered string
+            sr5 = arcpy.SpatialReference()                                          # Initiate the new SRS
+            sr5.loadFromString(DEMSR2)                                              # Load SRS from altered string
+            del modelSR_GCS, DEMSR_GCS, modelSR2, DEMSR2
+            projpoly = boundaryPolygon.projectAs(sr5)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS
+        elif ArcVersionF <= 10.3:
+            arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
+            printMessages(arcpy, ['    Tranformation: {0}'.format(geoTransfmName)])
+            projpoly = boundaryPolygon.projectAs(sr3, geoTransfmName)               # Reproject the boundary polygon from the WRF domain to the input raster CRS using custom geotransformation
+        elif ArcVersionF >= 10.6:
+            # Custom geotransformation appears not to be a valid input to the .projectAs geometry tool in ArcGIS 10.6
+            # However, if you create a custom geotransformation beforehand, then it will be respected bye the projectAs function
+            arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
+            projpoly = boundaryPolygon.projectAs(sr3) # Reproject the boundary polygon from the WRF domain to the input raster CRS
+    else:
+        projpoly = boundaryPolygon.projectAs(sr3)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS
     polyextent = projpoly.extent
     del projpoly, boundaryPolygon
 
@@ -1160,9 +1201,12 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
         arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr4, ElevResampleMethod, cellsize2)
         arcpy.DefineProjection_management(MosaicLayer, sr3)                     # Put it back to the way it was
     elif ArcVersionF <= 10.3 or ArcVersionF >= 10.6 or ArcProduct == 'ArcGISPro':
-        printMessages(arcpy, ['    ArcGIS version {0} found. Using Custom Geotransformation ({1})'.format(ArcVersion, geoTransfmName)])
-        arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, ElevResampleMethod, cellsize2, geoTransfmName)
-
+        if skip_custom_GT:
+            printMessages(arcpy, ['    ArcGIS version {0} found. No Custom Geotransformation used.'.format(ArcVersion)])
+            arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, ElevResampleMethod, cellsize2)
+        else:
+            printMessages(arcpy, ['    ArcGIS version {0} found. Using Custom Geotransformation ({1})'.format(ArcVersion, geoTransfmName)])
+            arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, ElevResampleMethod, cellsize2, geoTransfmName)
     printMessages(arcpy, ['    Finished projecting input elevation data to WRF coordinate system.'])
     printMessages(arcpy, ['    The fine grid (before ExtractByMask) has {0} rows and {1} columns.'.format(arcpy.Describe(mosprj).height, arcpy.Describe(mosprj).width)])
 
@@ -1999,7 +2043,7 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     WeirEs = rootgrp.createVariable('WeirE', 'f8', (dim1))                      # Variable (64-bit floating point)
     AscendOrder = rootgrp.createVariable('ascendingIndex', 'i4', (dim1))        # Variable (32-bit signed integer)
     ifd = rootgrp.createVariable('ifd', 'f4', (dim1))                           # Variable (32-bit floating point)
-    #Dam = rootgrp.createVariable('Dam_Length', 'i4', (dim1))                    # Variable (32-bit signed integer)                                                                                                               
+    #Dam = rootgrp.createVariable('Dam_Length', 'i4', (dim1))                    # Variable (32-bit signed integer)
 
     # Add CF-compliant coordinate system variable
     if pointCF:
@@ -2060,7 +2104,7 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     longs[:] = numpy.array([cen_lons[lkid] for lkid in min_elev_keys])
     WeirEs[:] = numpy.array([WeirE_vals[lkid] for lkid in min_elev_keys])    # WierH is 0.9 of the distance between the low elevation and max lake elevation
     ifd[:] = ifd_Val
-    #Dam[:] = dam_length                    
+    #Dam[:] = dam_length
 
     # Close file
     rootgrp.close()
