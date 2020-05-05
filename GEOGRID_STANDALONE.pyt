@@ -125,7 +125,8 @@ class Toolbox(object):
                         DomainShapefile,
                         Reach_Based_Routing_Addition,
                         Lake_Parameter_Addition,
-                        GWBUCKPARM]
+                        GWBUCKPARM,
+                        Gage_Addition]
 
 class ProcessGeogridFile(object):
     def __init__(self):
@@ -1121,6 +1122,7 @@ class Reach_Based_Routing_Addition(object):
         # Unzip
         wrfh.printMessages(arcpy, ['Begining processing on {0}'.format(time.ctime())])
         wrfh.printMessages(arcpy, ['Beginning to extract WRF routing grids...'])
+        wrfh.printMessages(arcpy, ['Temporary output directory: {0}'.format(projdir)])
 
         # Unzip to a known location (make sure no other nc files live here)
         FullDom = wrfh.FullDom
@@ -1267,14 +1269,13 @@ class Lake_Parameter_Addition(object):
         # Create scratch directory for temporary outputs
         projdir = arcpy.CreateScratchName("temp", data_type="Folder", workspace=arcpy.env.scratchFolder)
         os.mkdir(projdir)
+        wrfh.printMessages(arcpy, ['Temporary output directory: {0}'.format(projdir)])
         arcpy.env.overwriteOutput = True
         arcpy.env.workspace = projdir
         arcpy.env.scratchWorkspace = projdir
 
         # Unzip to a known location (make sure no other nc files live here)
-        FullDom = wrfh.FullDom
-        GWBasins = wrfh.GWGRID_nc
-        out_sfolder = wrfh.Examine_Outputs(arcpy, in_zip, projdir, skipfiles=[FullDom, GWBasins])
+        out_sfolder = wrfh.Examine_Outputs(arcpy, in_zip, projdir, skipfiles=[wrfh.FullDom, wrfh.GWGRID_nc])
 
         # Prepare other rasters for the Lake Routing function
         channelgrid = arcpy.Raster(os.path.join(projdir, 'CHANNELGRID'))
@@ -1298,7 +1299,7 @@ class Lake_Parameter_Addition(object):
         del flac, fill2, channelgrid, sr, cellsize, in_lakes, in_zip
 
         # Add new LINKID grid to the FullDom file
-        rootgrp = netCDF4.Dataset(os.path.join(projdir, FullDom), 'r+')         # Read+ object on old FullDom file
+        rootgrp = netCDF4.Dataset(os.path.join(projdir, wrfh.FullDom), 'r+')         # Read+ object on old FullDom file
 
         # Save the gridded lake array to the Fulldom file
         if Gridded:
@@ -1467,6 +1468,249 @@ class GWBUCKPARM(object):
         shutil.rmtree(projdir)
         tee.close()
         del projdir, GWBasns, GWBasns_arr, in_geo, in_Polys, in_method, tee
+        return
+
+class Gage_Addition(object):
+    def __init__(self):
+        """Define the tool (tool name is the name of the class)."""
+        self.label = "Add Gages to Routing Stack"
+        self.description = "This tool takes an input Routing Stack .ZIP file," + \
+                           " typically created by the Process GEOGRID File tool," + \
+                           " and adds in the gage location file." + \
+                           "Only use this tool if the existing routing stack was " + \
+                           " built without gages in the first place."
+        self.canRunInBackground = True
+        self.category = "Utilities"
+
+    def getParameterInfo(self):
+        """Define parameter definitions"""
+
+        # Input parameter
+        in_zip = arcpy.Parameter(
+            displayName="Routing Stack ZIP File",
+            name="in_zip",
+            datatype="File",
+            parameterType="Required",
+            direction="Input")
+        in_zip.filter.list = ['zip']
+
+        # Input parameter
+        in_csv = arcpy.Parameter(
+            displayName="Forecast Points (CSV)",
+            name="in_csv",
+            datatype="File",
+            parameterType="Required",
+            direction="Input")
+        # To define a file filter that includes .csv and .txt extensions, set the filter list to a list of file extension names
+        in_csv.filter.list = ['csv']
+
+        basin_mask = arcpy.Parameter(
+            displayName="Mask CHANNELGRID variable to forecast basins?",
+            name="basin_mask",
+            datatype="GPBoolean",
+            parameterType="Optional",
+            direction="Input")
+        basin_mask.value = False
+
+        # Output parameter
+        out_zip = arcpy.Parameter(
+            displayName="Output ZIP File",
+            name="out_zip",
+            datatype="File",
+            parameterType="Required",
+            direction="Output")
+
+        parameters = [in_zip, in_csv, basin_mask, out_zip]
+        return parameters
+
+    def isLicensed(self):
+        """Allow the tool to execute, only if the ArcGIS Spatial Analyst extension
+        is available."""
+        try:
+            if arcpy.CheckExtension("Spatial") != "Available":
+                raise Exception
+        except Exception:
+            return False                                                            # tool cannot be executed
+        return True                                                                 # tool can be executed
+
+    def updateParameters(self, parameters):
+        """Modify the values and properties of parameters before internal
+        validation is performed.  This method is called whenever a parameter
+        has been changed."""
+        return
+
+    def updateMessages(self, parameters):
+        """Modify the messages created by internal validation for each tool
+        parameter.  This method is called after internal validation."""
+        return
+
+    def execute(self, parameters, messages):
+        """The source code of the tool."""
+        reload(wrfh)                                                            # Reload in case code changes have been made
+        tic = time.time()                                                       # Initiate timer
+        isError = False                                                         # Starting Error condition (no errors)
+
+        # Gather all necessary parameters
+        in_zip = parameters[0].valueAsText
+        in_csv = parameters[1].valueAsText
+        basin_mask = parameters[2].value
+        out_zip = parameters[3].valueAsText
+
+        wrfh.printMessages(arcpy, ['Begining processing on {0}'.format(time.ctime())])
+        wrfh.printMessages(arcpy, ['Beginning to extract WRF-Hydro routing grids...'])
+
+        # Create scratch directory for temporary outputs
+        projdir = arcpy.CreateScratchName("temp", data_type="Folder", workspace=arcpy.env.scratchFolder)
+        os.mkdir(projdir)
+        wrfh.printMessages(arcpy, ['Temporary output directory: {0}'.format(projdir)])
+        arcpy.env.overwriteOutput = True
+        arcpy.env.workspace = projdir
+        arcpy.env.scratchWorkspace = projdir
+
+        # Unzip to a known location (make sure no other nc files live here)
+        out_sfolder = wrfh.Examine_Outputs(arcpy, in_zip, projdir, skipfiles=[wrfh.FullDom, wrfh.GWGRID_nc])
+
+        # Prepare other rasters for the Lake Routing function
+        channelgrid = arcpy.Raster(os.path.join(projdir, 'CHANNELGRID'))
+        flac = arcpy.Raster(os.path.join(projdir, 'flowacc'))
+        fdir = arcpy.Raster(os.path.join(projdir, 'flowdirection'))
+
+        # Check to see if this was a reach-based routing domain
+        if os.path.exists(os.path.join(projdir, 'LINKID')):
+            Gridded = False
+            linkid = arcpy.Raster(os.path.join(projdir, 'LINKID'))
+        else:
+            Gridded = True
+
+        # Get georeference inforormation from unzipped raster layer
+        sr = arcpy.Describe(channelgrid).spatialReference
+        arcpy.env.outputCoordinateSystem = sr
+        cellsize = channelgrid.meanCellHeight
+
+        # Read FULLDOM file
+        rootgrp = netCDF4.Dataset(os.path.join(projdir, wrfh.FullDom), 'r+')    # Read+ object on old FullDom file
+
+        # Obtain global values from function script
+        walker = wrfh.walker
+        NoDataVal = wrfh.NoDataVal
+        strm = SetNull(channelgrid, '1', 'VALUE = {0}'.format(NoDataVal))
+
+        # Find out if forecast points are chosen, then set mask for them
+        try:
+            # Make feature layer from CSV
+            wrfh.printMessages(arcpy, ['    Forecast points provided and basins being delineated.'])
+            frxst_layer = 'frxst_layer'                                             # XY Event Layer name
+            frsxt_FC = os.path.join('in_memory', 'frxst_FC')                        # In-memory feature class
+            sr1 = arcpy.SpatialReference(4326)                                      # GCS_WGS_1984
+            arcpy.MakeXYEventLayer_management(in_csv, 'LON', 'LAT', frxst_layer, sr1)
+            arcpy.CopyFeatures_management(frxst_layer, frsxt_FC)                    # To support ArcGIS 10.6, an XY event layer cannot be used in SnapRaster
+            tolerance = int(cellsize * walker)
+            tolerance1 = int(cellsize)
+            frxst_raster = SnapPourPoint(frsxt_FC, flac, tolerance1, 'FID')
+            frxst_raster2 = Con(IsNull(frxst_raster) == 0, frxst_raster, NoDataVal)
+            frxst_raster2_var = rootgrp.variables['frxst_pts']
+            frxst_raster2_arr = arcpy.RasterToNumPyArray(frxst_raster2)
+            frxst_raster2_var[:] = frxst_raster2_arr
+            wrfh.printMessages(arcpy, ['    Process: frxst_pts written to output netCDF.'])
+            del frxst_raster2_arr
+
+            SnapPour = SnapPourPoint(frsxt_FC, flac, tolerance)
+            arcpy.Delete_management(frxst_layer)
+            arcpy.Delete_management(frsxt_FC)
+            arcpy.Delete_management(frxst_raster2)
+            del frxst_raster2
+
+            # Delineate above points
+            outWatershed = Watershed(fdir, SnapPour, 'VALUE')
+            outWatershed2 = Con(IsNull(outWatershed) == 0, outWatershed, NoDataVal)
+            outWatershed2_arr = arcpy.RasterToNumPyArray(outWatershed2)
+
+            # Default groundwater method changed 10/5/2017 to LINKID local basin method
+            gw_basns_var = rootgrp.variables['basn_msk']
+            gw_basns_var[:] = outWatershed2_arr
+            wrfh.printMessages(arcpy, ['    Process: basn_msk written to output netCDF.'])
+            del outWatershed2_arr
+
+            # Set mask for future raster output
+            if basin_mask:
+                channelgrid2 = Con(outWatershed2 >= 0, IsNull(strm), Con(IsNull(strm), 1, -1))  # Converts channelgrid values inside basins to 0, outside to -1
+                strm = Con(channelgrid2 == 1, NoDataVal, channelgrid2)
+                del channelgrid2
+            del outWatershed2
+
+            # Add gage points from input forecast points file
+            # Note: Does not take existence of lakes into account
+            if not Gridded:
+                frxst_linkID = {}                                               # Create blank dictionary so that it exists and can be deleted later
+                wrfh.printMessages(arcpy, ['        Adding forecast points:LINKID association.'])
+
+                # Input forecast points raster must be forecast point IDs and NoData only
+                out_frxst_linkIDs = os.path.join('in_memory', 'frxst_linkIDs')
+
+                # Sample the LINKID value for each forecast point. Result is a table
+                Sample(linkid, frxst_raster, out_frxst_linkIDs, "NEAREST")
+                frxst_linkID = {int(row[-1]):int(row[1]) for row in arcpy.da.SearchCursor(out_frxst_linkIDs, '*')}  # Dictionary of LINKID:forecast point for all forecast points
+                arcpy.Delete_management(out_frxst_linkIDs)
+                wrfh.printMessages(arcpy, ['        Found {0} forecast point:LINKID associations.'.format(len(frxst_linkID))])
+                del out_frxst_linkIDs
+
+                # Update the gages in the streams shapefile - Not sure this block works
+                with arcpy.da.UpdateCursor(os.path.join(projdir, wrfh.StreamSHP), ['ARCID', 'GageID']) as rows:
+                    for row in rows:
+                        if row[0] in frxst_linkID:
+                            row[1] = frxst_linkID[row[0]]
+                            #wrfh.printMessages(arcpy, ['          Gage {0} added to link {1}'.format(frxst_linkID[row[0]], row[0])])
+                        rows.updateRow(row)
+
+                # Alter the RouteLink netCDF file# The output RouteLink netCDF file, to be kept with routing stack
+                rootgrp_rl = netCDF4.Dataset(os.path.join(projdir, wrfh.RT_nc), 'r+')
+                Gages = rootgrp_rl.variables['gages']
+                order = rootgrp_rl.variables['link'][:]
+                Gages[:, :] = numpy.asarray([tuple(str(frxst_linkID[arcid]).rjust(15)) if arcid in frxst_linkID else tuple('               ') for arcid in order])
+                rootgrp_rl.close()
+                del rootgrp_rl, Gages, frxst_linkID, order
+
+            arcpy.Delete_management(frxst_raster)                               # Clean up
+            del frxst_raster
+
+            # Process: Output Channelgrid
+            channelgrid_var = rootgrp.variables['CHANNELGRID']
+            channelgrid_arr = arcpy.RasterToNumPyArray(strm)
+            channelgrid_var[:] = channelgrid_arr
+            wrfh.printMessages(arcpy, ['    Process: CHANNELGRID written to output netCDF.'])
+            del channelgrid_arr
+
+        except Exception as e:
+            wrfh.printMessages(arcpy, ['Exception: {0}'.format(e)])
+            isError = True
+
+        rootgrp.close()
+        del rootgrp
+
+        # Clean up and give finishing message
+        if isError:
+            wrfh.printMessages(arcpy, ['Error encountered after {0} seconds.'.format(time.time()-tic)])
+            arcpy.env.workspace = projdir
+            for infile in arcpy.ListDatasets():
+                arcpy.Delete_management(infile)
+            arcpy.Delete_management(projdir)
+            arcpy.AddError("ERROR")
+            raise SystemExit
+        else:
+            # Zip everything back up (all possible files)
+            zipper = wrfh.zipUpFolder(arcpy, projdir, out_zip, nclist)
+            wrfh.printMessages(arcpy, ['Completed without error in {0} seconds.'.format(time.time()-tic)])
+            arcpy.env.workspace = projdir
+            for infile in arcpy.ListDatasets():
+                arcpy.Delete_management(infile)
+            arcpy.Delete_management(projdir)
+            del zipper
+
+        # Clean up and return
+        arcpy.Delete_management('in_memory')
+        arcpy.AddMessage('Process completed without error.')
+        arcpy.AddMessage('Output ZIP File: %s' %out_zip)
+        del out_zip
         return
 
 # --- End Toolbox Classes --- #

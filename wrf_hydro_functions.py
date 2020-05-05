@@ -3022,6 +3022,7 @@ def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_
         channelgrid_var = rootgrp.variables['CHANNELGRID']
         channelgrid_arr = arcpy.RasterToNumPyArray(channelgrid)
         channelgrid_var[:] = channelgrid_arr
+        del channelgrid_arr
         printMessages(arcpy, ['    Process: CHANNELGRID written to output netCDF.'])
 
     else:
