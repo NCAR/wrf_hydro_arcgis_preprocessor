@@ -1659,7 +1659,7 @@ class Gage_Addition(object):
                     for row in rows:
                         if row[0] in frxst_linkID:
                             row[1] = frxst_linkID[row[0]]
-                            wrfh.printMessages(arcpy, ['          Gage {0} added to link {1}'.format(frxst_linkID[row[0]], row[0])])
+                            #wrfh.printMessages(arcpy, ['          Gage {0} added to link {1}'.format(frxst_linkID[row[0]], row[0])])
                         rows.updateRow(row)
 
                 # Alter the RouteLink netCDF file# The output RouteLink netCDF file, to be kept with routing stack
