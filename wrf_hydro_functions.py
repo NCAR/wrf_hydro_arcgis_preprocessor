@@ -454,7 +454,7 @@ class WRF_Hydro_Grid:
                                      'PARAMETER["False_Easting",0.0],'
                                      'PARAMETER["False_Northing",0.0],'
                                      'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
-                                     'PARAMETER["Standard_Parallel_1",' + str(standard_parallel_1) + '],'
+                                     'PARAMETER["Standard_Parallel_1",0.0],'
                                      'UNIT["Meter",1.0]]')                          # 'UNIT["Degree", 1.0]]') # ?? For lat-lon grid?
                 proj4 = ("+proj=eqc +units=m +a={} +b={} +lon_0={}".format(str(sphere_radius), str(sphere_radius), str(central_meridian)))
 
