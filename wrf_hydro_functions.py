@@ -2219,7 +2219,11 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
 
     # Create a raster from the lake polygons that matches the channelgrid layer
     arcpy.CopyFeatures_management("Lakeslyr", outfeatures)
-    arcpy.PolygonToRaster_conversion(outfeatures, lakeID, outRastername, "MAXIMUM_AREA")    # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
+    arcpy.PolygonToRaster_conversion(in_features=outfeatures,
+        value_field=lakeID,
+        out_rasterdataset=outRastername,
+        priority_field="NONE",
+        cell_assignment="MAXIMUM_AREA")   # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
     #arcpy.FeatureToRaster_conversion(outfeatures, lakeID, outRastername)       # This tool requires only ArcGIS for Desktop Basic, but does not allow a priority field
 
     # Code-block to eliminate lakes that do not coincide with active channel cells
@@ -2250,7 +2254,11 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
         printMessages(arcpy, ['    Found {0} lakes on active channels.'.format(num)])
         printMessages(arcpy, ['    Eliminated {0} lakes because they were not connected to a channel pixel.'.format(counter)])
         arcpy.Delete_management(outRastername)                                  # Delete it so that it can be recreated
-        arcpy.PolygonToRaster_conversion(outfeatures, lakeID, outRastername, "MAXIMUM_AREA")    # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
+        arcpy.PolygonToRaster_conversion(in_features=outfeatures,
+            value_field=lakeID,
+            out_rasterdataset=outRastername,
+            priority_field="NONE",
+            cell_assignment="MAXIMUM_AREA")   # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
 
     # Gather areas from AREASQKM field (2/23/2018 altered in order to provide non-gridded areas)
     #areas = {row[0]: row[1]*1000000 for row in arcpy.da.SearchCursor("Lakeslyr", [lakeID, Field1])}     # Convert to square meters
