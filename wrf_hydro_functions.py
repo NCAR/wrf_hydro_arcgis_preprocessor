@@ -1582,7 +1582,7 @@ def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, in_rast
     # Use extent of channelgrid raster to add a feature layer of lake polygons
     outshp = os.path.join(outDir, TempLakeFIle)
     arcpy.CopyFeatures_management(WB, outshp)
-    lakeID = assign_lake_IDs(arcpy, outshp, lakeIDfield=defaultLakeID)
+    lakeID = assign_lake_IDs(arcpy, outshp)
 
     #arcpy.AddField_management(FL, lakeID, "SHORT")
     dtypes = numpy.dtype([(FLID, 'i4'), (hydroSeq, 'i4')])           # Create a numpy dtype object
@@ -2099,10 +2099,10 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     OrificeCs[:] = OrificeC
     OrificeAs[:] = OrificA
     Times[:] = 0
-    OrificeEs[:] = numpy.array([OrificEs[lkid] for lkid in min_elev_keys])   # Orifice elevation is 1/3 between 'min' and max lake elevation.
+    OrificeEs[:] = numpy.array([OrificEs.get(lkid,0) for lkid in min_elev_keys])   # Orifice elevation is 1/3 between 'min' and max lake elevation.
     lats[:] = numpy.array([cen_lats[lkid] for lkid in min_elev_keys])
     longs[:] = numpy.array([cen_lons[lkid] for lkid in min_elev_keys])
-    WeirEs[:] = numpy.array([WeirE_vals[lkid] for lkid in min_elev_keys])    # WierH is 0.9 of the distance between the low elevation and max lake elevation
+    WeirEs[:] = numpy.array([WeirE_vals.get(lkid,0) for lkid in min_elev_keys])    # WierH is 0.9 of the distance between the low elevation and max lake elevation
     ifd[:] = ifd_Val
     #Dam[:] = dam_length
 
@@ -2325,6 +2325,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
     del elevRange, noDepthLks
 
     # Calculate the Orifice and Wier heights
+    min_elev_keys = list(min_elevs.keys())                                      # Re-generate list because it may have changed.
     OrificEs = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x])/3)) for x in min_elev_keys}             # Orific elevation is 1/3 between the low elevation and max lake elevation
     WeirE_vals = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x]) * 0.9)) for x in min_elev_keys}       # WierH is 0.9 of the distance between the low elevation and max lake elevation
 
