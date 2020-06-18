@@ -443,7 +443,7 @@ class ProcessGeogridFile(object):
             arcpy.env.workspace = projdir
             for infile in arcpy.ListDatasets():
                 arcpy.Delete_management(infile)
-            #arcpy.Delete_management(projdir)
+            arcpy.Delete_management(projdir)
             arcpy.AddError("ERROR")
             raise SystemExit
         else:
