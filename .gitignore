@@ -1,0 +1,8 @@
+# Byte-compiled / optimized / DLL files
+*.py[cod]
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# ArcGIS Python Toolbox XML files
+GEOGRID_STANDALONE.*.pyt.xml
