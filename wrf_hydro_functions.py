@@ -1136,8 +1136,11 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     	printMessages(arcpy, ['    The input and output coordinate system are identical. Skipping custom geotransformation step.'])
     	skip_custom_GT = True
     elif (sr2.semiMinorAxis == sr3.semiMinorAxis) and (sr2.semiMajorAxis == sr3.semiMajorAxis):
-    	printMessages(arcpy, ['    The input and output share the same datum. Skipping custom geotransformation step.'])
-    	skip_custom_GT = True
+        if (sr2.semiMinorAxis != 0.0) and (sr2.semiMajorAxis != 0.0):           # Added 6/18/2020 to avoid mis-specified axes to be confused with one another.
+	        printMessages(arcpy, ['    The input and output share the same datum. Skipping custom geotransformation step.'])
+	        skip_custom_GT = True
+        else:
+            skip_custom_GT = False
     else:
     	skip_custom_GT = False
     # --- Experimental Code --- #
@@ -1145,7 +1148,7 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     # Create a projected boundary polygon of the model domain with which to clip the in_raster
     if not skip_custom_GT:
         if ArcProduct == 'ArcGISPro':
-            arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
+            arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm) # GEOGCS portion to 'fake' a known spherical datum
             printMessages(arcpy, ['    Tranformation: {0}'.format(geoTransfmName)])
             projpoly = boundaryPolygon.projectAs(sr3)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS using custom geotransformation
         elif ArcVersionF > 10.3 and ArcVersionF < 10.6:
