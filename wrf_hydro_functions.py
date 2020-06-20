@@ -323,12 +323,13 @@ class WRF_Hydro_Grid:
         if map_pro == 1:
             # Lambert Conformal Conic
             if 'standard_parallel_2' in locals():
-                projname = 'Lambert_Conformal_Conic_2SP'
+                #projname = 'Lambert_Conformal_Conic_2SP'
                 printMessages(arcpy, ['    Using Standard Parallel 2 in Lambert Conformal Conic map projection.'])
             else:
                 # According to http://webhelp.esri.com/arcgisdesktop/9.2/index.cfm?TopicName=Lambert_Conformal_Conic
-                projname = 'Lambert_Conformal_Conic_1SP'
+                #projname = 'Lambert_Conformal_Conic_1SP'
                 standard_parallel_2 = standard_parallel_1
+            projname = 'Lambert_Conformal_Conic'
             Projection_String = ('PROJCS["Sphere_Lambert_Conformal_Conic",'
                                  'GEOGCS["GCS_Sphere",'
                                  'DATUM["D_Sphere",'
@@ -475,7 +476,8 @@ class WRF_Hydro_Grid:
         self.x00 = point2.X                                                     # X value doesn't change from LLcorner to UL corner
         self.y00 = point2.Y + float(abs(self.DY)*self.nrows)                    # Adjust Y from LL to UL
         self.proj = sr2
-        self.WKT = Projection_String.replace("'", '"')                          # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
+        #self.WKT = Projection_String.replace("'", '"')                          # Replace ' with " so Esri can read the PE String properly when running NetCDFtoRaster
+        self.WKT = sr2.exportToString()
         self.proj4 = proj4
         self.point = point2
         self.map_pro = map_pro
@@ -1079,6 +1081,104 @@ def create_CF_NetCDF(arcpy, grid_obj, rootgrp, addLatLon=False, notes='', addVar
     # Return the netCDF file to the calling script
     return rootgrp
 
+def assert_crs_attribs(arcpy, crs1, crs2, strict=False, datumOnly=False):
+    """
+    Adapted from code written by ChrisWills (StackExchange username):
+        https://gis.stackexchange.com/questions/170088/checking-if-two-feature-classes-have-same-spatial-reference-using-arcpy
+
+    Adapted to check primarily for datum similarity, because this is used to
+    check if a custom geotransformation between datums is necessary.
+
+    Asserts equality of all relevant attributes of the provided geoprocessing spatial
+    reference objects. These are generated using arcpy.Describe(your_dataset).spatialReference.
+
+    Attributes of spatial reference object:
+        https://pro.arcgis.com/en/pro-app/arcpy/classes/spatialreference.htm
+
+    crs1 - a spatial reference object
+    crs2 - a spatial reference object
+    strict - boolean - if True will compare every element (default: False)
+    """
+
+    try:
+        # Consider these parameters or primary importance - related to the datum
+        assert(crs1.semiMajorAxis==crs2.semiMajorAxis)                          # The semi-major axis length of this spheroid.2
+        assert(crs1.semiMinorAxis==crs2.semiMinorAxis)                          # The semi-minor axis length of this spheroid.2
+        assert(crs1.spheroidCode==crs2.spheroidCode)                            # The spheroid code.2
+        assert(crs1.spheroidName==crs2.spheroidName)                            # The spheroid name.2
+        assert(crs1.datumCode==crs2.datumCode)                                  # The datum code.2
+        assert(crs1.datumName==crs2.datumName)                                  # The datum name.2
+        assert(crs1.flattening==crs2.flattening)                                # The flattening ratio of this spheroid.2
+
+        if not datumOnly:
+            # These are important to establishing if the projection parametes are equal
+            assert(crs1.centralMeridian==crs2.centralMeridian)                  # The central meridian of a projected coordinate system.1
+            assert(crs1.centralParallel==crs2.centralParallel)                  # The central parallel of a projected coordinate system.1
+            assert(crs1.falseEasting==crs2.falseEasting)                        # The false easting of a projected coordinate system.1
+            assert(crs1.falseNorthing==crs2.falseNorthing)                      # The false northing of a projected coordinate system.1
+            assert(crs1.latitudeOf1st==crs2.latitudeOf1st)                      # The latitude of the first point of a projected coordinate system.1
+            assert(crs1.latitudeOf2nd==crs2.latitudeOf2nd)                      # The latitude of the second point of a projected coordinate system.1
+            assert(crs1.latitudeOfOrigin==crs2.latitudeOfOrigin)                # The latitude of origin of a projected coordinate system.1
+            assert(crs1.longitudeOfOrigin==crs2.longitudeOfOrigin)              # The longitude of origin of a projected coordinate system.1
+            assert(crs1.scaleFactor==crs2.scaleFactor)                          # The scale factor of a projected coordinate system.1
+            assert(crs1.standardParallel1==crs2.standardParallel1)              # The first parallel of a projected coordinate system.1
+            assert(crs1.standardParallel2==crs2.standardParallel2)              # The second parallel of a projected coordinate system.1
+            assert(crs1.longitude==crs2.longitude)                              # The longitude value of this prime meridian.2
+            assert(crs1.primeMeridianCode==crs2.primeMeridianCode)              # The prime meridian code.2
+
+            # Secondary importance
+            assert(crs1.name==crs2.name)                                        # The name of the spatial reference.
+            assert(crs1.projectionName==crs2.projectionName)                    # The projection name.1
+            assert(crs1.projectionCode==crs2.projectionCode)                    # The projection code.1
+            assert(crs1.GCSCode==crs2.GCSCode)                                  # The geographic coordinate system code.2
+            assert(crs1.GCSName==crs2.GCSName)                                  # The geographic coordinate system name.2
+            assert(crs1.PCSCode==crs2.PCSCode)                                  # The projected coordinate system code.1
+            assert(crs1.PCSName==crs2.PCSName)                                  # The projected coordinate system name.1
+
+        # These parameters could potentially be ignored
+        if strict:
+            # These are other parameters that may or may not be similar
+            assert(crs1.azimuth==crs2.azimuth)                                  # The azimuth of a projected coordinate system.1
+            assert(crs1.centralMeridianInDegrees==crs2.centralMeridianInDegrees)# The central meridian (Lambda0) of a projected coordinate system in degrees.1
+            assert(crs1.MFalseOriginAndUnits==crs2.MFalseOriginAndUnits)        # The measure false origin and units.
+            assert(crs1.MResolution==crs2.MResolution)                          # The measure resolution.
+            assert(crs1.MTolerance==crs2.MTolerance)                            # The measure tolerance.
+            assert(crs1.XYTolerance==crs2.XYTolerance)                          # The xy tolerance.
+            assert(crs1.ZDomain==crs2.ZDomain)                                  # The extent of the z domain.
+            assert(crs1.ZFalseOriginAndUnits==crs2.ZFalseOriginAndUnits)        # The z false origin and units.
+            assert(crs1.factoryCode==crs2.factoryCode)                          # The factory code or well-known ID (WKID) of the spatial reference.
+            assert(crs1.isHighPrecision==crs2.isHighPrecision)                  # Indicates whether the spatial reference has high precision set.
+            assert(crs1.linearUnitCode==crs2.linearUnitCode)                    # The linear unit code.
+            assert(crs1.linearUnitName==crs2.linearUnitName)                    # The linear unit name.1
+            assert(crs1.longitude==crs2.longitude)                              # The longitude value of this prime meridian.1
+            assert(crs1.longitudeOf1st==crs2.longitudeOf1st)                    # The longitude of the first point of a projected coordinate system.1
+            assert(crs1.longitudeOf2nd==crs2.longitudeOf2nd)                    # The longitude of the second point of a projected coordinate system.1
+            assert(crs1.metersPerUnit==crs2.metersPerUnit)                      # The meters per linear unit.1
+            assert(crs1.angularUnitCode==crs2.angularUnitCode)                  # The angular unit code.2
+            assert(crs1.angularUnitName==crs2.angularUnitName)                  # The angular unit name.2
+            assert(crs1.ZResolution==crs2.ZResolution)                          # The z resolution property.
+            assert(crs1.ZTolerance==crs2.ZTolerance)                            # The z-tolerance property.
+            assert(crs1.hasMPrecision==crs2.hasMPrecision)                      # Indicates whether m-value precision information has been defined.
+            assert(crs1.hasXYPrecision==crs2.hasXYPrecision)                    # Indicates whether xy precision information has been defined.
+            assert(crs1.hasZPrecision==crs2.hasZPrecision)                      # Indicates whether z-value precision information has been defined.
+            assert(crs1.XYResolution==crs2.XYResolution)                        # The xy resolution.
+            assert(crs1.domain==crs2.domain)                                    # The extent of the xy domain.
+            assert(crs1.MDomain==crs2.MDomain)                                  # The extent of the measure domain.
+            assert(crs1.remarks==crs2.remarks)                                  # The comment string of the spatial reference.
+            assert(crs1.type==crs2.type)                                        # The type of the spatial reference. Geographic: A geographic coordinate system. Projected: A projected coordinate system.
+            assert(crs1.usage==crs2.usage)                                      # The usage notes.
+            assert(crs1.classification==crs2.classification)                    # The classification of a map projection.1
+            assert(crs1.GCSCode==crs2.GCSCode)                                  # The geographic coordinate system code.2
+            assert(crs1.GCSName==crs2.GCSName)                                  # The geographic coordinate system name.2
+            assert(crs1.primeMeridianName==crs2.primeMeridianName)              # The prime meridian name.2
+            assert(crs1.radiansPerUnit==crs2.radiansPerUnit)                    # The radians per angular unit.2
+        return(True)
+    except:
+        printMessages(arcpy, ['    CRS differs between datasets.'])
+        printMessages(arcpy, ['    WKT for CRS 1: {0}'.format(crs1.exportToString())])
+        printMessages(arcpy, ['    WKT for CRS 2: {0}'.format(crs2.exportToString())])
+        return(False)
+
 def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, projdir):
     """
     The second step creates a high resolution topography raster using a hydrologically-
@@ -1130,21 +1230,14 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
 
     sr3 = arcpy.Describe(in_raster).spatialReference                            # Obtain the SRS object for the input high-resolution DEM
 
-    # --- Experimental Code --- #
     # Find out if the input and output share a datum, and thus no custom geotransformation is necessary.
-    skip_custom_GT = False
-    printMessages(arcpy, ['    WKT for the model grid: {0}'.format(sr2.exportToString())])
-    printMessages(arcpy, ['    WKT for the DEM grid:   {0}'.format(sr3.exportToString())])
-    if sr2.exportToString() == sr3.exportToString():
-    	printMessages(arcpy, ['    The input and output coordinate system are identical. Skipping custom geotransformation step.'])
-    	skip_custom_GT = True
-    elif (sr2.semiMinorAxis == sr3.semiMinorAxis) and (sr2.semiMajorAxis == sr3.semiMajorAxis):
-        #if (sr2.semiMinorAxis != 0.0) and (sr2.semiMajorAxis != 0.0):           # Added 6/18/2020 to avoid mis-specified axes to be confused with one another.
-	    printMessages(arcpy, ['    The input and output share the same datum. Skipping custom geotransformation step.'])
-	    skip_custom_GT = True
+    sameCRS = assert_crs_attribs(arcpy, sr2, sr3, strict=False, datumOnly=True)
+    if sameCRS:
+        printMessages(arcpy, ['    The input and output datums are identical. Skipping custom geotransformation step.'])
+        skip_custom_GT = True
     else:
-        printMessages(arcpy, ['    Custom geotransformation will be necessary.'])
-    # --- Experimental Code --- #
+        printMessages(arcpy, ['    Custom datum geotransformation will be necessary.'])
+        skip_custom_GT = False
 
     # Create a projected boundary polygon of the model domain with which to clip the in_raster
     if not skip_custom_GT:
