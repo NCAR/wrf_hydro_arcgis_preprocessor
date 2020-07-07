@@ -523,7 +523,16 @@ class ExportGrid(object):
         return
 
     def execute(self, parameters, messages):
-        """The source code of the tool."""
+        '''
+        Unfortunately, a multi-band output raster will not be possible in ArcGIS
+        Desktop (up to and through 10.8, and maybe beyond):
+
+            https://support.esri.com/en/bugs/nimbus/QlVHLTAwMDExNDExNw==#subscribe
+
+        The tool appears to work better in ArcGIS Pro, but yeilds both a multi-band
+        raster AND multiple 1-band rasters.
+        '''
+
         reload(wrfh)                                                            # Reload in case code changes have been made
 
         # Set environments
@@ -539,7 +548,15 @@ class ExportGrid(object):
         if LooseVersion(netCDF4.__version__) > LooseVersion('1.4.0'):
             rootgrp.set_auto_mask(False)                                        # Change masked arrays to old default (numpy arrays always returned)
         coarse_grid = wrfh.WRF_Hydro_Grid(arcpy, rootgrp)                       # Instantiate a grid object
-        nc_raster = coarse_grid.numpy_to_Raster(arcpy, wrfh.flip_grid(rootgrp.variables[Variable][0]))
+
+        # Old method
+        #nc_raster = coarse_grid.numpy_to_Raster(arcpy, wrfh.flip_grid(rootgrp.variables[Variable][0]))
+
+        # Enhancement to allow 3-dimensional arrays (other than 2D+t0)
+        ncArr = wrfh.subset_ncVar(arcpy, rootgrp.variables[Variable])
+        arcpy.AddMessage('      Size of array being sent to raster: {0}'.format(ncArr.shape))
+        nc_raster = coarse_grid.numpy_to_Raster(arcpy, ncArr)
+        arcpy.AddMessage('      Bands in output raster: {0}'.format(nc_raster.bandCount))
 
         # Set environments and save
         nc_raster.save(out_raster)

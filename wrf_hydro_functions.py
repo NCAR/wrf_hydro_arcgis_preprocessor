@@ -59,7 +59,7 @@ GWGRID_nc = 'GWBASINS.nc'
 GW_ASCII = 'gw_basns_geogrid.txt'                                               # Default Groundwater Basins ASCII grid output
 GW_TBL = 'GWBUCKPARM.TBL'
 StreamSHP = 'streams.shp'                                                       # Default streams shapefile name
-TempLakeFIle = 'in_lakes_clip.shp'                                              # Temporary output lake file (clipped to domain)
+TempLakeFile = r'in_memory/in_lakes_clip'                                       # Temporary output lake file (clipped to domain)
 LakesShp = 'lakes.shp'                                                          # Default lake shapefile name
 ###################################################
 
@@ -144,6 +144,8 @@ ifd_Val = 0.90                                                                  
 out_LKtype = ['nc']                                                             # Default output lake parameter file format ['nc', 'ascii']
 defaultLakeID = "NEWID"                                                         # Default new LakeID field for lakes, numbered 1..n
 Lakes_addFields = ['lake_id']                                                   # Variables from LAKEPARM file to add to the output lake shapefile (for convenience, plotting in GIS)
+lake_id_64 = False                                                              # 6/26/2020: Allows for 64-bit integer lake ID types. Supporting NHDPlus HR.
+subsetLakes = True                                                              # Option to eliminate lakes that do not intersect gridded channel network (gridded runs only)
 ###################################################
 
 ###################################################
@@ -166,6 +168,55 @@ NoDownstream = [None, -1, 0]                                                    
 LkNodata = 0                                                                    # Set the nodata value for the link-to-lake association
 hydroSeq = 'HydroSeq'                                                           # Fieldname that stores a hydrologic sequence (ascending from downstream to upstream)
 save_Lake_Link_Type_arr = True                                                  # Switch for saving the Lake_Link_Type_arr array to CSV
+###################################################
+
+###################################################
+# Global dictionary used in Add_Param_data_to_FC(). Specify the mapping between
+# netCDF variables and the field name, ArcGIS field type, and numpy dtype to use.
+# Field information. FC field name: [NC variable name, ArcGIS field type, numpy dtype]
+fields = {'link': ['link', 'LONG', 'i8'],
+            'from': ['from', 'LONG', 'i8'],
+            'to': ['to', 'LONG', 'i8'],
+            'lon': ['lon', 'FLOAT', 'f4'],
+            'lat': ['lat', 'FLOAT', 'f4'],
+            'alt': ['alt', 'FLOAT', 'f4'],
+            'order_': ['order', 'SHORT', 'i4'],
+            'Qi': ['Qi', 'FLOAT', 'f4'],
+            'MusK': ['MusK', 'FLOAT', 'f4'],
+            'MusX': ['MusX', 'FLOAT', 'f4'],
+            'Length': ['Length', 'FLOAT', 'f4'],
+            'n': ['n', 'FLOAT', 'f4'],
+            'So': ['So', 'FLOAT', 'f4'],
+            'ChSlp': ['ChSlp', 'FLOAT', 'f4'],
+            'BtmWdth': ['BtmWdth', 'FLOAT', 'f4'],
+            'x': ['x', 'FLOAT', 'f4'],
+            'y': ['y', 'FLOAT', 'f4'],
+            'Kchan': ['Kchan', 'SHORT', 'i4'],
+            'Lake': ['NHDWaterbodyComID', 'LONG', 'i4'],
+            'gages': ['gages', 'TEXT', '|S15'],
+            'Lake': ['NHDWaterbodyComID', 'LONG', 'i4'],
+            'lake_id': ['lake_id', 'LONG', 'i8'],
+            'LkArea': ['LkArea', 'FLOAT', 'f4'],
+            'LkMxE': ['LkMxE', 'FLOAT', 'f4'],
+            'WeirC': ['WeirC', 'FLOAT', 'f4'],
+            'WeirL': ['WeirL', 'FLOAT', 'f4'],
+            'OrificeC': ['OrificeC', 'FLOAT', 'f4'],
+            'OrificeA': ['OrificeA', 'FLOAT', 'f4'],
+            'OrificeE': ['OrificeE', 'FLOAT', 'f4'],
+            'WeirE': ['WeirE', 'FLOAT', 'f4'],
+            'ascendingIndex': ['ascendingIndex', 'SHORT', 'i4'],
+            'ifd': ['ifd', 'FLOAT', 'f4']}
+
+if lake_id_64:
+    # Alter the field type information for writing out a feature class later
+    fields['lake_id'] = ['lake_id', 'TEXT', 'f8']
+###################################################
+
+###################################################
+# Dimension names to be used to identify certain known dimensions
+yDims = ['south_north', 'y']
+xDims = ['west_east', 'x']
+timeDim = ['Time', 'time']
 ###################################################
 
 # --- End Globals --- #
@@ -1679,7 +1730,7 @@ def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, in_rast
     arcpy.env.outputCoordinateSystem = descData.spatialReference
 
     # Use extent of channelgrid raster to add a feature layer of lake polygons
-    outshp = os.path.join(outDir, TempLakeFIle)
+    outshp = os.path.join(outDir, TempLakeFile)
     arcpy.CopyFeatures_management(WB, outshp)
     lakeID = assign_lake_IDs(arcpy, outshp)
 
@@ -1731,40 +1782,6 @@ def Add_Param_data_to_FC(arcpy, inNC, inFC, FCIDfield='arcid', NCIDfield='link',
     '''
     tic1 = time.time()
     printMessages(arcpy, ['    Adding parameters from {0} to {1}.'.format(os.path.basename(inNC), os.path.basename(inFC))])
-
-    # Field information. FC field name: [NC variable name, ArcGIS field type, numpy dtype]
-    fields = {'link': ['link', 'LONG', 'i8'],
-                'from': ['from', 'LONG', 'i8'],
-                'to': ['to', 'LONG', 'i8'],
-                'lon': ['lon', 'FLOAT', 'f4'],
-                'lat': ['lat', 'FLOAT', 'f4'],
-                'alt': ['alt', 'FLOAT', 'f4'],
-                'order_': ['order', 'SHORT', 'i4'],
-                'Qi': ['Qi', 'FLOAT', 'f4'],
-                'MusK': ['MusK', 'FLOAT', 'f4'],
-                'MusX': ['MusX', 'FLOAT', 'f4'],
-                'Length': ['Length', 'FLOAT', 'f4'],
-                'n': ['n', 'FLOAT', 'f4'],
-                'So': ['So', 'FLOAT', 'f4'],
-                'ChSlp': ['ChSlp', 'FLOAT', 'f4'],
-                'BtmWdth': ['BtmWdth', 'FLOAT', 'f4'],
-                'x': ['x', 'FLOAT', 'f4'],
-                'y': ['y', 'FLOAT', 'f4'],
-                'Kchan': ['Kchan', 'SHORT', 'i4'],
-                'Lake': ['NHDWaterbodyComID', 'LONG', 'i4'],
-                'gages': ['gages', 'TEXT', '|S15'],
-                'Lake': ['NHDWaterbodyComID', 'LONG', 'i4'],
-                'lake_id': ['lake_id', 'LONG', 'i8'],
-                'LkArea': ['LkArea', 'FLOAT', 'f4'],
-                'LkMxE': ['LkMxE', 'FLOAT', 'f4'],
-                'WeirC': ['WeirC', 'FLOAT', 'f4'],
-                'WeirL': ['WeirL', 'FLOAT', 'f4'],
-                'OrificeC': ['OrificeC', 'FLOAT', 'f4'],
-                'OrificeA': ['OrificeA', 'FLOAT', 'f4'],
-                'OrificeE': ['OrificeE', 'FLOAT', 'f4'],
-                'WeirE': ['WeirE', 'FLOAT', 'f4'],
-                'ascendingIndex': ['ascendingIndex', 'SHORT', 'i4'],
-                'ifd': ['ifd', 'FLOAT', 'f4']}
 
     # Function options
     dimName = 'feature_id'                                                      # input netCDF dimension name
@@ -2114,7 +2131,17 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
                 Ideally, this will be the only place the produces the file, and
                 all functions wishing to write the file will reference this function.
     '''
+    #global lake_id_64
     min_elev_keys = list(min_elevs.keys())                                      # 5/31/2019: Supporting Python3
+
+    if lake_id_64:
+        outNCType = 'NETCDF4'
+        lake_id_dtype = 'i8'                                                    # (64-bit signed integer)
+        printMessages(arcpy, ['        Lake ID will be 64-bit integer type.'])
+        printMessages(arcpy, ['        {0} will be NETCDF4 format to support 64-bit integer data types.'.format(os.path.basename(LakeNC))])
+    else:
+        printMessages(arcpy, ['        Lake ID will be 32-bit integer type.'])
+        lake_id_dtype = 'i4'                                                    # (32-bit signed integer)
 
     # Create NetCDF output table
     rootgrp = netCDF4.Dataset(LakeNC, 'w', format=outNCType)
@@ -2125,7 +2152,7 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     dim = rootgrp.createDimension(dim1, len(min_elevs))
 
     # Create coordinate variables
-    ids = rootgrp.createVariable('lake_id', 'i4', (dim1))                       # Variable (32-bit signed integer)
+    ids = rootgrp.createVariable('lake_id', lake_id_dtype, (dim1))              # Variable (signed integer)
     ids[:] = numpy.array(min_elev_keys)                                         # Variable (32-bit signed integer)
 
     # Create fixed-length variables
@@ -2271,7 +2298,7 @@ def build_lake_FC(arcpy, Waterbody, Old_New_LakeComID, Lake_List=[], LkID=defaul
         arcpy.Delete_management(InLakes)                                        # Delete temporary layer
         printMessages(arcpy, ['    Created merged lake feature class: {0}'.format(Waterbody)])
 
-def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield=None, Gridded=True):
+def add_reservoirs_old(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield=None, Gridded=True):
     """
     This function is intended to add reservoirs into the model grid stack, such
     that the channelgrid and lake grids are modified to accomodate reservoirs and
@@ -2299,7 +2326,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
     arcpy.env.snapRaster = channelgrid
 
     # Temporary and permanent output files
-    outshp = os.path.join(projdir, TempLakeFIle)                                # If reach-based routing (with lakes) is selected, this shapefile may have already been created
+    outshp = os.path.join(projdir, TempLakeFile)                                # If reach-based routing (with lakes) is selected, this shapefile may have already been created
     outRastername = os.path.join(projdir, "Lakesras")
     outfeatures = os.path.join(projdir, LakesShp)
 
@@ -2481,6 +2508,285 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
     arcpy.Delete_management('in_memory')
     arcpy.Delete_management(outRastername)
     del projdir, fill2, cellsize, sr2, in_lakes, lakeIDList, outRaster, channelgrid
+    return arcpy, channelgrid_arr, outRaster_arr
+
+def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield=None, Gridded=True):
+    """
+    This function is intended to add reservoirs into the model grid stack, such
+    that the channelgrid and lake grids are modified to accomodate reservoirs and
+    lakes.
+
+    This version does not attempt to subset the lakes by a size threshold, nor
+    does it filter based on FTYPE.
+
+    2/23/2018:
+        Change made to how AREA paramter is calculated in LAKEPARM. Previously, it
+        was based on the gridded lake area. Now it is based on the AREASQKM field
+        in the input shapefile. This change was made because in NWM, the lakes
+        are represented as objects, and are not resolved on a grid.
+
+    6/26/2020:
+        Major changes to support 64-bit integer ID values (primarily for NHDPlus
+        HR IDs). This includes using an in-memory feature class instead of a shapefile
+        on disk for improved performance for DOUBLE and LONG field values. Also,
+        ZonalStatistics functions were replaced with numpy equivalents due to a
+        limitation in processing LONG integer rasters and feature class fields.
+
+    """
+
+    tic1 = time.time()                                                          # Set timer
+    printMessages(arcpy, ['  Adding reservoirs to routing stack.'])
+    printMessages(arcpy, ['    Gridded: {0}'.format(Gridded)])
+
+    # Get information about the input domain and set environments
+    arcpy.env.cellSize = cellsize
+    arcpy.env.extent = channelgrid
+    arcpy.env.outputCoordinateSystem = sr2
+    arcpy.env.snapRaster = channelgrid
+
+    # Temporary and permanent output files
+    outRastername = os.path.join(projdir, "Lakesras")
+    outfeatures = os.path.join(projdir, LakesShp)
+
+    if not os.path.exists(TempLakeFile):
+        # If reach-based routing (with lakes) is selected, this shapefile may have already been created
+        arcpy.CopyFeatures_management(in_lakes, TempLakeFile)
+        lakeID = assign_lake_IDs(arcpy, TempLakeFile, lakeIDfield=lakeIDfield)
+    elif lakeIDfield is None:
+        lakeID = defaultLakeID
+
+    # Create a raster from the lake polygons that matches the channelgrid layer
+    arcpy.MakeFeatureLayer_management(TempLakeFile, "Lakeslyr")
+
+    # Set up fields to add to input lakes feature class
+    Field1 = 'AREASQKM'
+    newFID = 'FID2'
+    FID = arcpy.Describe(TempLakeFile).OIDFieldName
+    existing_fields = [field.name for field in arcpy.ListFields(TempLakeFile)]
+
+    # Create new area field
+    if Field1 not in existing_fields:
+        arcpy.AddField_management(TempLakeFile, Field1, "FLOAT")
+        arcpy.CalculateField_management(TempLakeFile, Field1, '!shape.area@squarekilometers!', "PYTHON_9.3")
+
+    # Create new, unique FID field
+    if newFID not in existing_fields:
+        arcpy.AddField_management(TempLakeFile, newFID, "LONG")
+        arcpy.CalculateField_management(TempLakeFile, newFID, '!{0}!'.format(FID), "PYTHON_9.3")
+
+    # Build a mapping between the new, sequential ID scheme and the original IDs
+    IDmap = {row[0]: row[1] for row in arcpy.da.SearchCursor(TempLakeFile, (newFID, lakeID))}
+    IDmap2 = {val:key for key,val in IDmap.items()}
+
+    arcpy.PolygonToRaster_conversion(in_features=TempLakeFile,
+        value_field=newFID,
+        out_rasterdataset=outRastername,
+        priority_field="NONE",
+        cell_assignment="MAXIMUM_AREA")                                     # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
+    #arcpy.FeatureToRaster_conversion(TempLakeFile, newFID, outRastername)   # This tool requires only ArcGIS for Desktop Basic, but does not allow a priority field
+
+    # Code-block to eliminate lakes that do not coincide with active channel cells
+    channelgrid_arr = arcpy.RasterToNumPyArray(channelgrid, nodata_to_value=NoDataVal)     # Read channel grid array
+    Lake_arr = arcpy.RasterToNumPyArray(outRastername, nodata_to_value=NoDataVal)   # Read lake grid array
+    lake_uniques = numpy.unique(Lake_arr[Lake_arr!=NoDataVal])
+    if Gridded and subsetLakes:
+        # Ensure the lakes are coincident with channel cells. So slow...
+        Lk_chan = {lake:channelgrid_arr[numpy.logical_and(Lake_arr==lake, channelgrid_arr==0)].shape[0]>0 for lake in lake_uniques}
+        lake_uniques2 = numpy.array([lake for lake,val in Lk_chan.items() if val])   # New set of lakes to use
+
+        # Remove lakes from Lake Array that are not on channels. Could use Lake_arr[~numpy.isin(Lake_arr, lake_uniques2)] for python3
+        for item in lake_uniques:
+            if item not in lake_uniques2:
+                Lake_arr[Lake_arr==item] = NoDataVal                        # Eliminate this lake from the grid
+        lake_uniques = lake_uniques2.copy()
+        del Lk_chan, lake_uniques2
+
+        # Reset the 1...n index and eliminate lakes from shapefile that were eliminated here
+        num = 0
+        counter = 0
+        printMessages(arcpy, ['    Proceeding to eliminate lakes that are not connected to a channel pixel.'])
+        with arcpy.da.UpdateCursor(TempLakeFile, newFID) as cursor:
+            for row in cursor:
+                if row[0] not in lake_uniques:
+                    cursor.deleteRow()
+                    counter += 1
+                else:
+                    num += 1
+        printMessages(arcpy, ['    Found {0} lakes on active channels.'.format(num)])
+        printMessages(arcpy, ['    Eliminated {0} lakes because they were not connected to a channel pixel.'.format(counter)])
+        arcpy.Delete_management(outRastername)                                  # Delete it so that it can be recreated
+        arcpy.PolygonToRaster_conversion(in_features=TempLakeFile,
+            value_field=newFID,
+            out_rasterdataset=outRastername,
+            priority_field="NONE",
+            cell_assignment="MAXIMUM_AREA")   # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
+
+        # Read lake grid array
+        outRaster_arr = arcpy.RasterToNumPyArray(Raster(outRastername), nodata_to_value=NoDataVal)
+    else:
+        outRaster_arr = Lake_arr.copy()
+    #del Lake_arr
+
+    # Gather areas from AREASQKM field (2/23/2018 altered in order to provide non-gridded areas)
+    areas = {row[0]: row[1]*1000000 for row in arcpy.da.SearchCursor(TempLakeFile, [lakeID, Field1])}     # Convert to square meters
+
+    # Added 2/23/2018 to find which lakes go missing after resolving on the grid.
+    # Modified 6/26/2020 to re-map from requested IDs to the sequential IDs
+    lakeIDList = list(areas.keys())
+
+    # Find the maximum flow accumulation value for each lake
+    # Replaces the zonal statistics function with a numpy arra-based function in order to get around
+    # an issue with the input datatype (float field) of the input zone field.
+    flac_arr = arcpy.RasterToNumPyArray(flac)                               # Read flow accumulation grid array
+    flac_max = {lake:flac_arr[outRaster_arr==lake].max() for lake in lake_uniques}
+
+    # Prepare a rater of just lake outlets.
+    lakeOutlets = outRaster_arr.copy()                                      # Copy array to get datatype and shape
+    lakeOutlets[:] = NoDataVal                                              # Set all values to NoData
+    for lake,maxfac in flac_max.items():
+        # Add lake ID to the outlet location, based on maximum flow accumulation
+        lakeOutlets[numpy.logical_and(outRaster_arr==lake, flac_arr==maxfac)] = lake
+    #del flac_arr
+
+    # Iterate over lakes, assigning the outlet pixel to the lake ID in channelgrid
+    lakeOutlets_mask = lakeOutlets!=NoDataVal
+    lakeOutlets_remap = [IDmap[item] for item in lakeOutlets[lakeOutlets_mask]]
+    if Gridded:
+        # Set all lake areas to WRF-Hydro NoData value under these lakes
+        channelgrid_arr[outRaster_arr!=NoDataVal] = NoDataVal
+        channelgrid_arr[lakeOutlets_mask] = lakeOutlets[lakeOutlets_mask]
+
+    # Change the dtype and add actual lake IDs to the outlet points
+    if lake_id_64:
+        channelgrid_arr = channelgrid_arr.astype(numpy.int64)                   # Support larger integers for 64-bit lake I
+    channelgrid_arr[lakeOutlets_mask] = lakeOutlets_remap
+    del lakeOutlets_mask, lakeOutlets_remap
+
+    # Create the raster of lake outlet points in order to use the Snap Pour Point tool later
+    TestCon = arcpy.NumPyArrayToRaster(lakeOutlets,
+        fill2.extent.lowerLeft,
+        fill2.meanCellWidth,
+        fill2.meanCellHeight,
+        value_to_nodata=NoDataVal)
+    del lakeOutlets
+
+    # Now march down a set number of pixels to get minimum lake elevation
+    tolerance = int(float(arcpy.GetRasterProperties_management(channelgrid, 'CELLSIZEX').getOutput(0)) * LK_walker)
+    SnapPour = SnapPourPoint(SetNull(TestCon, TestCon, "VALUE = %s" %NoDataVal), flac, tolerance)   # Snap lake outlet pixel to FlowAccumulation with tolerance
+    del flac, tolerance
+
+    printMessages(arcpy, ['    Gathering lake parameter information.'])
+    pourPt_arr = arcpy.RasterToNumPyArray(SnapPour)                         # Read flow accumulation grid array
+    fill_arr = arcpy.RasterToNumPyArray(fill2)                              # Read topography grid array
+    min_elevs = {IDmap[lake]:fill_arr[pourPt_arr==lake][0] for lake in lake_uniques if lake in pourPt_arr}
+    #del pourPt_arr
+    del SnapPour
+
+    # Gathering maximum elevation from input DEM
+    max_elevs = {IDmap[lake]:fill_arr[outRaster_arr==lake].max() for lake in lake_uniques}
+    del lake_uniques
+    #del fill_arr
+
+    # 2/23/2018: Find the missing lakes and sample elevation at their true centroid.
+    min_elev_keys = list(min_elevs.keys())                                      # 5/31/2019: Supporting Python3
+    printMessages(arcpy, ['    Lakes in minimum elevation dict: {0}'.format(len(min_elev_keys))])
+    MissingLks = [item for item in lakeIDList if item not in min_elev_keys]  # 2/23/2018: Find lakes that were not resolved on the grid
+    shapes = {}
+    if len(MissingLks) > 0:
+        printMessages(arcpy, ['    Found {0} lakes that could not be resolved on the grid: {1}.'.format(len(MissingLks), str(MissingLks))])
+        printMessages(arcpy, ['      Sampling elevation from the centroid of these features.'])
+        arcpy.SelectLayerByAttribute_management("Lakeslyr", "NEW_SELECTION", '"%s" IN (%s)' %(lakeID, str(MissingLks)[1:-1]))  # Select the missing lakes from the input shapefile
+        centroids = os.path.join('in_memory', 'lake_centroids')                     # Input lake centroid points
+        out_centroids = os.path.join('in_memory', 'lake_elevs')                     # Input lake centroid points
+        arcpy.FeatureToPoint_management("Lakeslyr", centroids, "INSIDE")            # Convert polygons to points inside each polygon
+        Sample(fill2, centroids, out_centroids, "NEAREST", 'ORIG_FID')              # Sample the elevation value for each lake centroid point. Result is a table
+        centroidElev = {IDmap[row[1]]: row[-1] for row in arcpy.da.SearchCursor(out_centroids, '*')}   # Dictionary of LakeID:Centroid Elevatoin point for all forecast points
+        shapes.update({row[0]: row[1] for row in arcpy.da.SearchCursor(centroids, [lakeID, 'SHAPE@XY'])})		# Get the XY values to add to attributes later
+        max_elevs.update(centroidElev)                                              # Add single elevation value as max elevation
+        min_elevs.update(centroidElev)                                              # Make these lakes the minimum depth
+        arcpy.Delete_management(out_centroids)
+        arcpy.Delete_management(centroids)
+        del centroidElev, MissingLks
+
+    # Give a minimum active lake depth to all lakes with no elevation variation
+    elevRange = {key:max_elevs[key]-val for key, val in min_elevs.items()}      # Get lake depths
+    noDepthLks = {key:val for key, val in elevRange.items() if val < minDepth}  # Make a dictionary of these lakes
+    if len(noDepthLks) > 0:
+        printMessages(arcpy, ['    Found {0} lakes with elevation range below minimum. Providing minimum depth of {1}m for these lakes.'.format(len(noDepthLks), minDepth)])
+        min_elevs.update({key:max_elevs[key]-minDepth for key, val in noDepthLks.items() if val == 0}) # Give these lakes a minimum depth
+        noDepthFile = os.path.join(projdir, 'Lakes_with_minimum_depth.csv')
+        with open(noDepthFile, 'w') as f:
+            w = csv.writer(f)
+            w.writerow([lakeID, "original_depth"])
+            w.writerows(list(noDepthLks.items()))
+            del noDepthFile
+    del elevRange, noDepthLks
+
+    # Calculate the Orifice and Wier heights
+    min_elev_keys = list(min_elevs.keys())                                  # Re-generate list because it may have changed.
+    OrificEs = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x])/3)) for x in min_elev_keys}             # Orific elevation is 1/3 between the low elevation and max lake elevation
+    WeirE_vals = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x]) * 0.9)) for x in min_elev_keys}       # WierH is 0.9 of the distance between the low elevation and max lake elevation
+
+    #  Gather centroid lat/lons
+    out_lake_raster = os.path.join(projdir, "out_lake_raster.shp")
+    out_lake_raster_dis = os.path.join(projdir, "out_lake_raster_dissolve.shp")
+    arcpy.RasterToPolygon_conversion(outRastername, out_lake_raster, "NO_SIMPLIFY", "VALUE")
+    arcpy.Dissolve_management(out_lake_raster, out_lake_raster_dis, "GRIDCODE", "", "MULTI_PART")               # Dissolve to eliminate multipart features
+    arcpy.Delete_management(out_lake_raster)                                                                    # Added 9/4/2015
+
+    # Create a point geometry object from gathered lake centroid points
+    printMessages(arcpy, ['    Starting to gather lake centroid information.'])
+    sr1 = arcpy.SpatialReference()                                              # Project lake points to whatever coordinate system is specified by wkt_text in globals
+    sr1.loadFromString(wkt_text)                                                # Load the Sphere datum CRS using WKT
+    point = arcpy.Point()
+    cen_lats = {}
+    cen_lons = {}
+    shapes.update({IDmap[row[0]]: row[1] for row in arcpy.da.SearchCursor(out_lake_raster_dis, ['GRIDCODE', 'SHAPE@XY'])})
+    arcpy.Delete_management(out_lake_raster_dis)                                                                # Added 9/4/2015
+    for shape in shapes:
+        point.X = shapes[shape][0]
+        point.Y = shapes[shape][1]
+        pointGeometry = arcpy.PointGeometry(point, sr2)
+        projpoint = pointGeometry.projectAs(sr1)                                # Optionally add transformation method:
+        cen_lats[shape] = projpoint.firstPoint.Y
+        cen_lons[shape] = projpoint.firstPoint.X
+    printMessages(arcpy, ['    Done gathering lake centroid information.'])
+
+    # Create Lake parameter file
+    printMessages(arcpy, ['    Starting to create lake parameter table.'])
+    printMessages(arcpy, ['        Lakes Table: {0} lakes'.format(len(list(areas.keys())))])
+
+    # Call function to build lake parameter netCDF file
+    if 'nc' in out_LKtype:
+        LakeNC = os.path.join(projdir, LK_nc)
+        build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lats, cen_lons, WeirE_vals)
+    if 'ascii' in out_LKtype:
+        LakeTBL = os.path.join(projdir, LK_tbl)
+        build_LAKEPARM_ascii(LakeTBL, min_elevs, areas, max_elevs, OrificEs, cen_lats, cen_lons, WeirE_vals)
+        printMessages(arcpy, ['        Done writing LAKEPARM.TBL table to disk.'])
+
+    # Clean up by deletion
+    printMessages(arcpy, ['    Lake parameter table created without error in {0:3.2f} seconds.'.format(time.time()-tic1)])
+    if lake_id_64:
+        fields['lake_id'] = ['lake_id', 'TEXT', 'f8']
+    Add_Param_data_to_FC(arcpy, LakeNC, TempLakeFile, FCIDfield=lakeID, NCIDfield='lake_id', addFields=Lakes_addFields)
+    arcpy.CopyFeatures_management(TempLakeFile, outfeatures)
+
+    # Clean up
+    del sr1, point
+    arcpy.Delete_management("Lakeslyr")
+    arcpy.Delete_management(TempLakeFile)
+    arcpy.Delete_management('in_memory')
+    arcpy.Delete_management(outRastername)
+    del projdir, fill2, cellsize, sr2, in_lakes, lakeIDList, channelgrid
+
+    # Re-map the IDs in the output from sequential IDs to the original IDs
+    if lake_id_64:
+        outRaster_arr = outRaster_arr.astype(numpy.int64)
+    u, inv = numpy.unique(outRaster_arr, return_inverse=True)
+    outRaster_arr = numpy.array([IDmap.get(x, NoDataVal) for x in u])[inv].reshape(outRaster_arr.shape)
+    del u, inv
+
     return arcpy, channelgrid_arr, outRaster_arr
 
 def adjust_to_landmask(arcpy, in_raster, LANDMASK, sr2, projdir, inunits):
@@ -3826,6 +4132,72 @@ def LK_main(arcpy, outDir, Flowline, Waterbody, FromComIDs, order, fields, Subse
     printMessages(arcpy, ['    Finished building Lake Association and flowline connectivity tables.  Time elapsed: {0:3.2f} seconds.'.format(time.time()-tic1)])
     return WaterbodyDict, Lake_Link_Type_arr, Old_New_LakeComID
 
+def subset_ncVar(arcpy, ncVar, times=slice(None), DimToFlip='south_north'):
+    '''
+    7/7/2020:
+    This function will accept a netCDF4 Dataset variable object, and will attempt
+    to identify the time, x, and y dimensions. If requested, a dimension can be
+    specified that will be reversed. This is typically "south_north" dimesnion.
+    Also, a time index or slice may be provided. The time dimension size may
+    only be greater than 1 if the variable has only 3 dimensions (time, x, y),
+    for example.
+    '''
+
+    dimensions = ncVar.dimensions
+
+    # Ensure x and y dimensions are in the dimensions of the input dataset
+    assert all([any([dim in dimensions for dim in dims]) for dims in [yDims, xDims]])
+
+    # Construct slice to index entire array in original order
+    ind = [slice(None)] * len(dimensions)
+
+    # Find the index for the y dimension
+    xDimIdx = [dimensions.index(dim) for dim in dimensions if dim in xDims][0]
+    printMessages(arcpy, ["    X-dimension: '{0}'.".format(dimensions[xDimIdx])])
+
+    # Find the index for the y dimension
+    yDimIdx = [dimensions.index(dim) for dim in dimensions if dim in yDims][0]
+    printMessages(arcpy, ["    Y-dimension: '{0}'.".format(dimensions[yDimIdx])])
+
+    # Flip y-dimension if necessary
+    if DimToFlip in dimensions:
+        flipIdx = dimensions.index(DimToFlip)
+        ind[flipIdx] = slice(None,None,-1)
+        printMessages(arcpy, ["    Reversing order of dimension '{0}'".format(dimensions[flipIdx])])
+        del flipIdx
+    else:
+        printMessages(arcpy, ["    Requested dimension for reversal not found '{0}'.".format(DimToFlip)])
+
+    # Find the index for the time dimension
+    timeDimIdx = [dimensions.index(dim) for dim in dimensions if dim in timeDim]
+    if len(timeDimIdx) > 0:
+        timeDimIdx = timeDimIdx[0]
+        printMessages(arcpy, ["    Time dimension found: '{0}'.".format(dimensions[timeDimIdx])])
+
+        # Choose either a specific time, all times, or the first time to avoid
+        # having >1 dimensions. We don't want a 4th dimension that is size 1.
+        if ncVar.shape[timeDimIdx] == 1:
+            printMessages(arcpy, ['      Time dimension size = 1.'])
+            ind[timeDimIdx] = 0
+        else:
+            printMessages(arcpy, ['      Found time dimension != 1 [{0}].'.format(ncVar.shape[timeDimIdx])])
+            ind[timeDimIdx] = times
+
+            # Set any additional dimensions to 0
+            additionals = [dim for dim in dimensions if dim not in set(yDims + xDims + timeDim)]
+            for extraDim in additionals:
+                printMessages(arcpy, ["    Selecting '{}' = 0.".format(extraDim)])
+                ind[dimensions.index(extraDim)] = 0
+
+    else:
+        printMessages(arcpy, ['    No time dimension found.'])
+
+    # Read the array as requested, reversing y if necessary, and subsetting in time
+    ncArr = ncVar[ind]
+    assert len(ncArr.shape) <= 3
+
+    del dimensions, timeDimIdx, ind
+    return ncArr
 # --- End Functions --- #
 
 if __name__ == '__main__':
