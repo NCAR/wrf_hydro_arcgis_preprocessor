@@ -1385,6 +1385,12 @@ def coordMethod1(arcpy, coarse_grid, fine_grid, rootgrp, projdir='in_memory'):
     latArr = flip_grid(rootgrp.variables['XLAT_M'][0])                          # Extract array of GEOGRID latitude values
     lonArr = flip_grid(rootgrp.variables['XLONG_M'][0])                         # Extract array of GEOGRID longitude values
 
+    # Resolve any remaining issues with masked arrays. Happens in ArcGIS Desktop (python 2.7).
+    if numpy.ma.isMA(lonArr):
+        lonArr = lonArr.data
+    if numpy.ma.isMA(latArr):
+        latArr = latArr.data
+
     # Method 1: Use GEOGRID latitude and longitude fields and resample to routing grid
     latRaster1 = coarse_grid.numpy_to_Raster(arcpy, latArr)                     # Build raster out of GEOGRID latitude array - may only work in python 2
     lonRaster1 = coarse_grid.numpy_to_Raster(arcpy, lonArr)                     # Build raster out of GEOGRID longitude array - may only work in python2
