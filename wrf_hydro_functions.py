@@ -603,6 +603,10 @@ class WRF_Hydro_Grid:
         to raster.
         Only use 2D arrays as input.'''
 
+        # 7/16/2020: Check to make sure input is not a masked array. Happens in ArcGIS Desktop (python 2.7).
+        if numpy.ma.isMA(in_arr):
+            in_arr = in_arr.data
+
         # Process: Numpy Array to Raster
         nc_raster = arcpy.NumPyArrayToRaster(in_arr, self.point, self.DX, self.DY, value_to_nodata)
 
