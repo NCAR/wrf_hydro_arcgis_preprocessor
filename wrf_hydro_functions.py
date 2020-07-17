@@ -1349,10 +1349,13 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
         '''If the ArcGIS Version is 10.3. or 10.3.1, then a Null Custom Geotransformation
         may be used to appropriately transform data between sphere and spheroid without
         applying any translation.'''
-        printMessages(arcpy, ['    ArcGIS version > 10.3 & < 10.6 found ({0}). No Custom Geotransformation used.'.format(ArcVersion)])
-        arcpy.DefineProjection_management(MosaicLayer, sr5)                     # Reset the projection to the model SRS
-        arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr4, ElevResampleMethod, cellsize2)
-        arcpy.DefineProjection_management(MosaicLayer, sr3)                     # Put it back to the way it was
+        if skip_custom_GT:
+            arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, ElevResampleMethod, cellsize2)
+        else:
+            printMessages(arcpy, ['    ArcGIS version > 10.3 & < 10.6 found ({0}). No Custom Geotransformation used.'.format(ArcVersion)])
+            arcpy.DefineProjection_management(MosaicLayer, sr5)                     # Reset the projection to the model SRS
+            arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr4, ElevResampleMethod, cellsize2)
+            arcpy.DefineProjection_management(MosaicLayer, sr3)                     # Put it back to the way it was
     elif ArcVersionF <= 10.3 or ArcVersionF >= 10.6 or ArcProduct == 'ArcGISPro':
         if skip_custom_GT:
             printMessages(arcpy, ['    ArcGIS version {0} found. No Custom Geotransformation used.'.format(ArcVersion)])
