@@ -1187,118 +1187,120 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
 
     sr3 = arcpy.Describe(in_raster).spatialReference                            # Obtain the SRS object for the input high-resolution DEM
 
-    # Find out if the input and output share a datum, and thus no custom geotransformation is necessary.
-    strict = False
-    datumOnly = True
-    try:
-        """
-        Adapted from code written by ChrisWills (StackExchange username):
-            https://gis.stackexchange.com/questions/170088/checking-if-two-feature-classes-have-same-spatial-reference-using-arcpy
-
-        Adapted to check primarily for datum similarity, because this is used to
-        check if a custom geotransformation between datums is necessary.
-
-        Asserts equality of all relevant attributes of the provided geoprocessing spatial
-        reference objects. These are generated using arcpy.Describe(your_dataset).spatialReference.
-
-        Attributes of spatial reference object:
-            https://pro.arcgis.com/en/pro-app/arcpy/classes/spatialreference.htm
-
-        sr2 - a spatial reference object
-        sr3 - a spatial reference object
-        strict - boolean - if True will compare every element (default: False)
-
-        Originally this portion was in a function. However, the spatial reference
-        objects seemed to 'lose' their datum information when passed to the function,
-        where all datum-related values were set to 0.0 or ''. Also, this happened
-        when passing the WKT for these spatial reference objects and building an
-        SRS from them.
-        """
-
-        # Consider these parameters or primary importance - related to the datum
-        assert(sr2.semiMajorAxis==sr3.semiMajorAxis)                          # The semi-major axis length of this spheroid.2
-        assert(sr2.semiMinorAxis==sr3.semiMinorAxis)                          # The semi-minor axis length of this spheroid.2
-        assert(sr2.spheroidCode==sr3.spheroidCode)                            # The spheroid code.2
-        assert(sr2.spheroidName==sr3.spheroidName)                            # The spheroid name.2
-        assert(sr2.datumCode==sr3.datumCode)                                  # The datum code.2
-        assert(sr2.datumName==sr3.datumName)                                  # The datum name.2
-        assert(sr2.flattening==sr3.flattening)                                # The flattening ratio of this spheroid.2
-
-        if not datumOnly:
-            # These are important to establishing if the projection parametes are equal
-            assert(sr2.centralMeridian==sr3.centralMeridian)                  # The central meridian of a projected coordinate system.1
-            assert(sr2.centralParallel==sr3.centralParallel)                  # The central parallel of a projected coordinate system.1
-            assert(sr2.falseEasting==sr3.falseEasting)                        # The false easting of a projected coordinate system.1
-            assert(sr2.falseNorthing==sr3.falseNorthing)                      # The false northing of a projected coordinate system.1
-            assert(sr2.latitudeOf1st==sr3.latitudeOf1st)                      # The latitude of the first point of a projected coordinate system.1
-            assert(sr2.latitudeOf2nd==sr3.latitudeOf2nd)                      # The latitude of the second point of a projected coordinate system.1
-            assert(sr2.latitudeOfOrigin==sr3.latitudeOfOrigin)                # The latitude of origin of a projected coordinate system.1
-            assert(sr2.longitudeOfOrigin==sr3.longitudeOfOrigin)              # The longitude of origin of a projected coordinate system.1
-            assert(sr2.scaleFactor==sr3.scaleFactor)                          # The scale factor of a projected coordinate system.1
-            assert(sr2.standardParallel1==sr3.standardParallel1)              # The first parallel of a projected coordinate system.1
-            assert(sr2.standardParallel2==sr3.standardParallel2)              # The second parallel of a projected coordinate system.1
-            assert(sr2.longitude==sr3.longitude)                              # The longitude value of this prime meridian.2
-            assert(sr2.primeMeridianCode==sr3.primeMeridianCode)              # The prime meridian code.2
-
-            # Secondary importance
-            assert(sr2.name==sr3.name)                                        # The name of the spatial reference.
-            assert(sr2.projectionName==sr3.projectionName)                    # The projection name.1
-            assert(sr2.projectionCode==sr3.projectionCode)                    # The projection code.1
-            assert(sr2.GCSCode==sr3.GCSCode)                                  # The geographic coordinate system code.2
-            assert(sr2.GCSName==sr3.GCSName)                                  # The geographic coordinate system name.2
-            assert(sr2.PCSCode==sr3.PCSCode)                                  # The projected coordinate system code.1
-            assert(sr2.PCSName==sr3.PCSName)                                  # The projected coordinate system name.1
-
-        # These parameters could potentially be ignored
-        if strict:
-            # These are other parameters that may or may not be similar
-            assert(sr2.azimuth==sr3.azimuth)                                  # The azimuth of a projected coordinate system.1
-            assert(sr2.centralMeridianInDegrees==sr3.centralMeridianInDegrees)# The central meridian (Lambda0) of a projected coordinate system in degrees.1
-            assert(sr2.MFalseOriginAndUnits==sr3.MFalseOriginAndUnits)        # The measure false origin and units.
-            assert(sr2.MResolution==sr3.MResolution)                          # The measure resolution.
-            assert(sr2.MTolerance==sr3.MTolerance)                            # The measure tolerance.
-            assert(sr2.XYTolerance==sr3.XYTolerance)                          # The xy tolerance.
-            assert(sr2.ZDomain==sr3.ZDomain)                                  # The extent of the z domain.
-            assert(sr2.ZFalseOriginAndUnits==sr3.ZFalseOriginAndUnits)        # The z false origin and units.
-            assert(sr2.factoryCode==sr3.factoryCode)                          # The factory code or well-known ID (WKID) of the spatial reference.
-            assert(sr2.isHighPrecision==sr3.isHighPrecision)                  # Indicates whether the spatial reference has high precision set.
-            assert(sr2.linearUnitCode==sr3.linearUnitCode)                    # The linear unit code.
-            assert(sr2.linearUnitName==sr3.linearUnitName)                    # The linear unit name.1
-            assert(sr2.longitude==sr3.longitude)                              # The longitude value of this prime meridian.1
-            assert(sr2.longitudeOf1st==sr3.longitudeOf1st)                    # The longitude of the first point of a projected coordinate system.1
-            assert(sr2.longitudeOf2nd==sr3.longitudeOf2nd)                    # The longitude of the second point of a projected coordinate system.1
-            assert(sr2.metersPerUnit==sr3.metersPerUnit)                      # The meters per linear unit.1
-            assert(sr2.angularUnitCode==sr3.angularUnitCode)                  # The angular unit code.2
-            assert(sr2.angularUnitName==sr3.angularUnitName)                  # The angular unit name.2
-            assert(sr2.ZResolution==sr3.ZResolution)                          # The z resolution property.
-            assert(sr2.ZTolerance==sr3.ZTolerance)                            # The z-tolerance property.
-            assert(sr2.hasMPrecision==sr3.hasMPrecision)                      # Indicates whether m-value precision information has been defined.
-            assert(sr2.hasXYPrecision==sr3.hasXYPrecision)                    # Indicates whether xy precision information has been defined.
-            assert(sr2.hasZPrecision==sr3.hasZPrecision)                      # Indicates whether z-value precision information has been defined.
-            assert(sr2.XYResolution==sr3.XYResolution)                        # The xy resolution.
-            assert(sr2.domain==sr3.domain)                                    # The extent of the xy domain.
-            assert(sr2.MDomain==sr3.MDomain)                                  # The extent of the measure domain.
-            assert(sr2.remarks==sr3.remarks)                                  # The comment string of the spatial reference.
-            assert(sr2.type==sr3.type)                                        # The type of the spatial reference. Geographic: A geographic coordinate system. Projected: A projected coordinate system.
-            assert(sr2.usage==sr3.usage)                                      # The usage notes.
-            assert(sr2.classification==sr3.classification)                    # The classification of a map projection.1
-            assert(sr2.GCSCode==sr3.GCSCode)                                  # The geographic coordinate system code.2
-            assert(sr2.GCSName==sr3.GCSName)                                  # The geographic coordinate system name.2
-            assert(sr2.primeMeridianName==sr3.primeMeridianName)              # The prime meridian name.2
-            assert(sr2.radiansPerUnit==sr3.radiansPerUnit)                    # The radians per angular unit.2
-        sameCRS = True
-    except:
-        printMessages(arcpy, ['    CRS differs between datasets.'])
-        printMessages(arcpy, ['    WKT for CRS 1: {0}'.format(sr2.exportToString())])
-        printMessages(arcpy, ['    WKT for CRS 2: {0}'.format(sr3.exportToString())])
-        sameCRS = False
-
-    if sameCRS:
-        printMessages(arcpy, ['    The input and output datums are identical. Skipping custom geotransformation step.'])
-        skip_custom_GT = True
-    else:
-        printMessages(arcpy, ['    Custom datum geotransformation will be necessary.'])
-        skip_custom_GT = False
+    # Reserved for future functionality pending Esri Support ticket 02599013
+    skip_custom_GT = False
+    ##    # Find out if the input and output share a datum, and thus no custom geotransformation is necessary.
+    ##    strict = False
+    ##    datumOnly = True
+    ##    try:
+    ##        """
+    ##        Adapted from code written by ChrisWills (StackExchange username):
+    ##            https://gis.stackexchange.com/questions/170088/checking-if-two-feature-classes-have-same-spatial-reference-using-arcpy
+    ##
+    ##        Adapted to check primarily for datum similarity, because this is used to
+    ##        check if a custom geotransformation between datums is necessary.
+    ##
+    ##        Asserts equality of all relevant attributes of the provided geoprocessing spatial
+    ##        reference objects. These are generated using arcpy.Describe(your_dataset).spatialReference.
+    ##
+    ##        Attributes of spatial reference object:
+    ##            https://pro.arcgis.com/en/pro-app/arcpy/classes/spatialreference.htm
+    ##
+    ##        sr2 - a spatial reference object
+    ##        sr3 - a spatial reference object
+    ##        strict - boolean - if True will compare every element (default: False)
+    ##
+    ##        Originally this portion was in a function. However, the spatial reference
+    ##        objects seemed to 'lose' their datum information when passed to the function,
+    ##        where all datum-related values were set to 0.0 or ''. Also, this happened
+    ##        when passing the WKT for these spatial reference objects and building an
+    ##        SRS from them.
+    ##        """
+    ##
+    ##        # Consider these parameters or primary importance - related to the datum
+    ##        assert(sr2.semiMajorAxis==sr3.semiMajorAxis)                          # The semi-major axis length of this spheroid.2
+    ##        assert(sr2.semiMinorAxis==sr3.semiMinorAxis)                          # The semi-minor axis length of this spheroid.2
+    ##        assert(sr2.spheroidCode==sr3.spheroidCode)                            # The spheroid code.2
+    ##        assert(sr2.spheroidName==sr3.spheroidName)                            # The spheroid name.2
+    ##        assert(sr2.datumCode==sr3.datumCode)                                  # The datum code.2
+    ##        assert(sr2.datumName==sr3.datumName)                                  # The datum name.2
+    ##        assert(sr2.flattening==sr3.flattening)                                # The flattening ratio of this spheroid.2
+    ##
+    ##        if not datumOnly:
+    ##            # These are important to establishing if the projection parametes are equal
+    ##            assert(sr2.centralMeridian==sr3.centralMeridian)                  # The central meridian of a projected coordinate system.1
+    ##            assert(sr2.centralParallel==sr3.centralParallel)                  # The central parallel of a projected coordinate system.1
+    ##            assert(sr2.falseEasting==sr3.falseEasting)                        # The false easting of a projected coordinate system.1
+    ##            assert(sr2.falseNorthing==sr3.falseNorthing)                      # The false northing of a projected coordinate system.1
+    ##            assert(sr2.latitudeOf1st==sr3.latitudeOf1st)                      # The latitude of the first point of a projected coordinate system.1
+    ##            assert(sr2.latitudeOf2nd==sr3.latitudeOf2nd)                      # The latitude of the second point of a projected coordinate system.1
+    ##            assert(sr2.latitudeOfOrigin==sr3.latitudeOfOrigin)                # The latitude of origin of a projected coordinate system.1
+    ##            assert(sr2.longitudeOfOrigin==sr3.longitudeOfOrigin)              # The longitude of origin of a projected coordinate system.1
+    ##            assert(sr2.scaleFactor==sr3.scaleFactor)                          # The scale factor of a projected coordinate system.1
+    ##            assert(sr2.standardParallel1==sr3.standardParallel1)              # The first parallel of a projected coordinate system.1
+    ##            assert(sr2.standardParallel2==sr3.standardParallel2)              # The second parallel of a projected coordinate system.1
+    ##            assert(sr2.longitude==sr3.longitude)                              # The longitude value of this prime meridian.2
+    ##            assert(sr2.primeMeridianCode==sr3.primeMeridianCode)              # The prime meridian code.2
+    ##
+    ##            # Secondary importance
+    ##            assert(sr2.name==sr3.name)                                        # The name of the spatial reference.
+    ##            assert(sr2.projectionName==sr3.projectionName)                    # The projection name.1
+    ##            assert(sr2.projectionCode==sr3.projectionCode)                    # The projection code.1
+    ##            assert(sr2.GCSCode==sr3.GCSCode)                                  # The geographic coordinate system code.2
+    ##            assert(sr2.GCSName==sr3.GCSName)                                  # The geographic coordinate system name.2
+    ##            assert(sr2.PCSCode==sr3.PCSCode)                                  # The projected coordinate system code.1
+    ##            assert(sr2.PCSName==sr3.PCSName)                                  # The projected coordinate system name.1
+    ##
+    ##        # These parameters could potentially be ignored
+    ##        if strict:
+    ##            # These are other parameters that may or may not be similar
+    ##            assert(sr2.azimuth==sr3.azimuth)                                  # The azimuth of a projected coordinate system.1
+    ##            assert(sr2.centralMeridianInDegrees==sr3.centralMeridianInDegrees)# The central meridian (Lambda0) of a projected coordinate system in degrees.1
+    ##            assert(sr2.MFalseOriginAndUnits==sr3.MFalseOriginAndUnits)        # The measure false origin and units.
+    ##            assert(sr2.MResolution==sr3.MResolution)                          # The measure resolution.
+    ##            assert(sr2.MTolerance==sr3.MTolerance)                            # The measure tolerance.
+    ##            assert(sr2.XYTolerance==sr3.XYTolerance)                          # The xy tolerance.
+    ##            assert(sr2.ZDomain==sr3.ZDomain)                                  # The extent of the z domain.
+    ##            assert(sr2.ZFalseOriginAndUnits==sr3.ZFalseOriginAndUnits)        # The z false origin and units.
+    ##            assert(sr2.factoryCode==sr3.factoryCode)                          # The factory code or well-known ID (WKID) of the spatial reference.
+    ##            assert(sr2.isHighPrecision==sr3.isHighPrecision)                  # Indicates whether the spatial reference has high precision set.
+    ##            assert(sr2.linearUnitCode==sr3.linearUnitCode)                    # The linear unit code.
+    ##            assert(sr2.linearUnitName==sr3.linearUnitName)                    # The linear unit name.1
+    ##            assert(sr2.longitude==sr3.longitude)                              # The longitude value of this prime meridian.1
+    ##            assert(sr2.longitudeOf1st==sr3.longitudeOf1st)                    # The longitude of the first point of a projected coordinate system.1
+    ##            assert(sr2.longitudeOf2nd==sr3.longitudeOf2nd)                    # The longitude of the second point of a projected coordinate system.1
+    ##            assert(sr2.metersPerUnit==sr3.metersPerUnit)                      # The meters per linear unit.1
+    ##            assert(sr2.angularUnitCode==sr3.angularUnitCode)                  # The angular unit code.2
+    ##            assert(sr2.angularUnitName==sr3.angularUnitName)                  # The angular unit name.2
+    ##            assert(sr2.ZResolution==sr3.ZResolution)                          # The z resolution property.
+    ##            assert(sr2.ZTolerance==sr3.ZTolerance)                            # The z-tolerance property.
+    ##            assert(sr2.hasMPrecision==sr3.hasMPrecision)                      # Indicates whether m-value precision information has been defined.
+    ##            assert(sr2.hasXYPrecision==sr3.hasXYPrecision)                    # Indicates whether xy precision information has been defined.
+    ##            assert(sr2.hasZPrecision==sr3.hasZPrecision)                      # Indicates whether z-value precision information has been defined.
+    ##            assert(sr2.XYResolution==sr3.XYResolution)                        # The xy resolution.
+    ##            assert(sr2.domain==sr3.domain)                                    # The extent of the xy domain.
+    ##            assert(sr2.MDomain==sr3.MDomain)                                  # The extent of the measure domain.
+    ##            assert(sr2.remarks==sr3.remarks)                                  # The comment string of the spatial reference.
+    ##            assert(sr2.type==sr3.type)                                        # The type of the spatial reference. Geographic: A geographic coordinate system. Projected: A projected coordinate system.
+    ##            assert(sr2.usage==sr3.usage)                                      # The usage notes.
+    ##            assert(sr2.classification==sr3.classification)                    # The classification of a map projection.1
+    ##            assert(sr2.GCSCode==sr3.GCSCode)                                  # The geographic coordinate system code.2
+    ##            assert(sr2.GCSName==sr3.GCSName)                                  # The geographic coordinate system name.2
+    ##            assert(sr2.primeMeridianName==sr3.primeMeridianName)              # The prime meridian name.2
+    ##            assert(sr2.radiansPerUnit==sr3.radiansPerUnit)                    # The radians per angular unit.2
+    ##        sameCRS = True
+    ##    except:
+    ##        printMessages(arcpy, ['    CRS differs between datasets.'])
+    ##        printMessages(arcpy, ['    WKT for CRS 1: {0}'.format(sr2.exportToString())])
+    ##        printMessages(arcpy, ['    WKT for CRS 2: {0}'.format(sr3.exportToString())])
+    ##        sameCRS = False
+    ##
+    ##    if sameCRS:
+    ##        printMessages(arcpy, ['    The input and output datums are identical. Skipping custom geotransformation step.'])
+    ##        skip_custom_GT = True
+    ##    else:
+    ##        printMessages(arcpy, ['    Custom datum geotransformation will be necessary.'])
+    ##        skip_custom_GT = False
 
     # Create a projected boundary polygon of the model domain with which to clip the in_raster
     if not skip_custom_GT:
