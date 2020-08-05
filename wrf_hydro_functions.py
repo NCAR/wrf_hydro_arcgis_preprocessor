@@ -1158,8 +1158,8 @@ def assert_crs_attribs(arcpy, crs1, crs2, strict=False, datumOnly=False):
     # Added 7/20/20 because the crs1 and crs2 objects end up with all parameters
     # equal to 0 when passed into this function.
 
-    printMessages(arcpy, ['WKT for CRS 1:\n\t{0}'.format(crs1.exportToString())])
-    printMessages(arcpy, ['WKT for CRS 2:\n\t{0}'.format(crs2.exportToString())])
+    printMessages(arcpy, ['    WKT for CRS 1:\n\t{0}'.format(crs1.exportToString())])
+    printMessages(arcpy, ['    WKT for CRS 2:\n\t{0}'.format(crs2.exportToString())])
 
     # Look at the GCS of the spatialreference object
     crs1GCS = crs1.GCS
@@ -1240,8 +1240,6 @@ def assert_crs_attribs(arcpy, crs1, crs2, strict=False, datumOnly=False):
         return(True)
     except:
         printMessages(arcpy, ['    CRS differs between datasets.'])
-        printMessages(arcpy, ['    WKT for CRS 1: {0}'.format(crs1.exportToString())])
-        printMessages(arcpy, ['    WKT for CRS 2: {0}'.format(crs2.exportToString())])
         return(False)
 
 def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, projdir):
@@ -1330,6 +1328,7 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
             arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
             projpoly = boundaryPolygon.projectAs(sr3) # Reproject the boundary polygon from the WRF domain to the input raster CRS
     else:
+        printMessages(arcpy, ['    No custom geotransformation will be necessary.'])
         projpoly = boundaryPolygon.projectAs(sr3)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS
     polyextent = projpoly.extent
     del projpoly, boundaryPolygon
