@@ -3257,7 +3257,20 @@ def build_GW_buckets(arcpy, out_dir, GWBasns, GWBasns_arr, coarse_grid, tbl_type
     del arcpy, tic1, tbl_type, out_dir, Grid, coarse_grid   # Attempt to get the script to release the Fulldom_hires.nc file
     return
 
-def sa_functions(arcpy, rootgrp, bsn_msk, mosprj, ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold, routing, WKT='', in_lakes=None, lakeIDfield=None):
+def sa_functions(arcpy,
+                    rootgrp,
+                    bsn_msk,
+                    mosprj,
+                    ovroughrtfac_val,
+                    retdeprtfac_val,
+                    projdir,
+                    in_csv,
+                    threshold,
+                    routing,
+                    WKT='',
+                    in_lakes=None,
+                    lakeIDfield=None,
+                    startPts=None):
     """The last major function in the processing chain is to perform the spatial
     analyst functions to hydrologically process the input raster datasets."""
 

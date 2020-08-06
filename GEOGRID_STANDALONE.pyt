@@ -229,6 +229,15 @@ class ProcessGeogridFile(object):
         retdeprtfac_val.value = 1.0
         retdeprtfac_val.category = "Parameter Values"
 
+        # Reserved for future functi
+        channel_starts = arcpy.Parameter(
+            displayName="Channel Initiation Points Feature Class",
+            name="channel_starts",
+            datatype="DEFeatureClass",
+            parameterType="Optional",
+            direction="Input")
+        channel_starts.category = "Additional Functionality"
+
         out_zip = arcpy.Parameter(
             displayName="Output ZIP File",
             name="out_zip",
@@ -237,7 +246,8 @@ class ProcessGeogridFile(object):
             direction="Output")
         out_zip.value = 'WRF_Hydro_routing_grids.zip'
 
-        parameters = [in_nc, in_csv, basin_mask, RB_routing, Lake_routing, in_reservoirs, in_raster, cellsize, threshold, ovroughrtfac_val, retdeprtfac_val, out_zip]   #, in_LakeIDField
+        #parameters = [in_nc, in_csv, basin_mask, RB_routing, Lake_routing, in_reservoirs, in_raster, cellsize, threshold, ovroughrtfac_val, retdeprtfac_val, out_zip]   #, in_LakeIDField
+        parameters = [in_nc, in_csv, basin_mask, RB_routing, Lake_routing, in_reservoirs, in_raster, cellsize, threshold, ovroughrtfac_val, retdeprtfac_val, channel_starts, out_zip]   #, in_LakeIDField
         return parameters
 
     def isLicensed(self):
@@ -301,7 +311,9 @@ class ProcessGeogridFile(object):
         threshold = parameters[8].value
         ovroughrtfac_val = parameters[9].value
         retdeprtfac_val = parameters[10].value
-        out_zip = parameters[11].valueAsText
+        channel_starts = parameters[11].valueAsText
+        #out_zip = parameters[11].valueAsText
+        out_zip = parameters[12].valueAsText
 
         # Prepare output log file
         outtable = os.path.join(os.path.dirname(out_zip), os.path.basename(out_zip) + '.log')
@@ -318,6 +330,12 @@ class ProcessGeogridFile(object):
         else:
             in_lakes = None
         wrfh.printMessages(arcpy, ['{0}'.format(in_lakes)])
+
+        # Interpret the input for channel initiation points
+        if channel_starts.lower == "none":
+            chpts = None
+        else:
+            chpts = channel_starts
 
         # Create scratch directory for temporary outputs
         projdir = os.path.join(os.path.dirname(out_zip), 'scratchdir')
@@ -416,7 +434,7 @@ class ProcessGeogridFile(object):
             # Step 4 - Hyrdo processing functions
             rootgrp2 = wrfh.sa_functions(arcpy, rootgrp2, basin_mask, mosprj,
                 ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold,
-                routing, in_lakes=in_lakes)
+                routing, in_lakes=in_lakes, startPts=chpts)
             rootgrp2.close()
             del rootgrp2
         except Exception as e:
