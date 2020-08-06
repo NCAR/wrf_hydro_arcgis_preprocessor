@@ -2158,6 +2158,7 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
         printMessages(arcpy, ['        {0} will be NETCDF4 format to support 64-bit integer data types.'.format(os.path.basename(LakeNC))])
     else:
         printMessages(arcpy, ['        Lake ID will be 32-bit integer type.'])
+        outNCType = 'NETCDF4_CLASSIC'
         lake_id_dtype = 'i4'                                                    # (32-bit signed integer)
 
     # Create NetCDF output table
