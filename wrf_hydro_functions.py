@@ -3102,11 +3102,13 @@ def sa_functions(arcpy,
     del fdir_arr
 
     # Use starting points to initiate channels
-    startPts = False                # Set functionality as inactive for now
     if not startPts:
+        printMessages(arcpy, ['    Flow accumulation will be thresholded to build channel pixels.'])
         flac = FlowAccumulation(fdir, '#', data_type='FLOAT', flow_direction_type="D8")
         strm = SetNull(flac, '1', 'VALUE < %s' % threshold)
     else:
+        printMessages(arcpy, ['    Flow accumulation will be weighted using input channel initiation points.'])
+
         # Create a raster of channel initiation points (1/Nodata)
         descData = arcpy.Describe(startPts)                                     # Get the description of the input feature class
         outRaster = os.path.join('in_memory', 'StartPts')                       # In-memory raster
