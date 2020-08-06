@@ -246,7 +246,6 @@ class ProcessGeogridFile(object):
             direction="Output")
         out_zip.value = 'WRF_Hydro_routing_grids.zip'
 
-        #parameters = [in_nc, in_csv, basin_mask, RB_routing, Lake_routing, in_reservoirs, in_raster, cellsize, threshold, ovroughrtfac_val, retdeprtfac_val, out_zip]   #, in_LakeIDField
         parameters = [in_nc, in_csv, basin_mask, RB_routing, Lake_routing, in_reservoirs, in_raster, cellsize, threshold, ovroughrtfac_val, retdeprtfac_val, channel_starts, out_zip]   #, in_LakeIDField
         return parameters
 
@@ -312,7 +311,6 @@ class ProcessGeogridFile(object):
         ovroughrtfac_val = parameters[9].value
         retdeprtfac_val = parameters[10].value
         channel_starts = parameters[11].valueAsText
-        #out_zip = parameters[11].valueAsText
         out_zip = parameters[12].valueAsText
 
         # Prepare output log file
