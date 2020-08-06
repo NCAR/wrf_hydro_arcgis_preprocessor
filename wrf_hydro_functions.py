@@ -2315,218 +2315,6 @@ def build_lake_FC(arcpy, Waterbody, Old_New_LakeComID, Lake_List=[], LkID=defaul
         arcpy.Delete_management(InLakes)                                        # Delete temporary layer
         printMessages(arcpy, ['    Created merged lake feature class: {0}'.format(Waterbody)])
 
-def add_reservoirs_old(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield=None, Gridded=True):
-    """
-    This function is intended to add reservoirs into the model grid stack, such
-    that the channelgrid and lake grids are modified to accomodate reservoirs and
-    lakes.
-
-    This version does not attempt to subset the lakes by a size threshold, nor
-    does it filter based on FTYPE.
-
-    2/23/2018:
-        Change made to how AREA paramter is calculated in LAKEPARM. Previously, it
-        was based on the gridded lake area. Now it is based on the AREASQKM field
-        in the input shapefile. This change was made because in NWM, the lakes
-        are represented as objects, and are not resolved on a grid.
-
-    """
-
-    tic1 = time.time()                                                          # Set timer
-    printMessages(arcpy, ['  Adding reservoirs to routing stack.'])
-    subsetLakes = True                                                          # Option to eliminate lakes that do not intersect channel network
-
-    # Get information about the input domain and set environments
-    arcpy.env.cellSize = cellsize
-    arcpy.env.extent = channelgrid
-    arcpy.env.outputCoordinateSystem = sr2
-    arcpy.env.snapRaster = channelgrid
-
-    # Temporary and permanent output files
-    outshp = os.path.join(projdir, TempLakeFile)                                # If reach-based routing (with lakes) is selected, this shapefile may have already been created
-    outRastername = os.path.join(projdir, "Lakesras")
-    outfeatures = os.path.join(projdir, LakesShp)
-
-    if not os.path.exists(outshp):
-        arcpy.CopyFeatures_management(in_lakes, outshp)
-        lakeID = assign_lake_IDs(arcpy, outshp, lakeIDfield=lakeIDfield)
-    elif lakeIDfield is None:
-        lakeID = defaultLakeID
-
-    # Create new area field
-    Field1 = 'AREASQKM'
-    if Field1 not in [field.name for field in arcpy.ListFields(outshp)]:
-        arcpy.AddField_management(outshp, Field1, "FLOAT")
-        arcpy.CalculateField_management(outshp, Field1, '!shape.area@squarekilometers!', "PYTHON_9.3")
-    arcpy.MakeFeatureLayer_management(outshp, "Lakeslyr")
-
-    # Create a raster from the lake polygons that matches the channelgrid layer
-    arcpy.CopyFeatures_management("Lakeslyr", outfeatures)
-    arcpy.PolygonToRaster_conversion(in_features=outfeatures,
-        value_field=lakeID,
-        out_rasterdataset=outRastername,
-        priority_field="NONE",
-        cell_assignment="MAXIMUM_AREA")   # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
-    #arcpy.FeatureToRaster_conversion(outfeatures, lakeID, outRastername)       # This tool requires only ArcGIS for Desktop Basic, but does not allow a priority field
-
-    # Code-block to eliminate lakes that do not coincide with active channel cells
-    strm_arr = arcpy.RasterToNumPyArray(channelgrid)                            # Read channel grid array
-    Lake_arr = arcpy.RasterToNumPyArray(outRastername)                          # Read lake grid array
-    lake_uniques = numpy.unique(Lake_arr[Lake_arr!=NoDataVal])
-    if Gridded and subsetLakes:
-        Lk_chan = {lake:strm_arr[numpy.logical_and(Lake_arr==lake, strm_arr==0)].shape[0]>0 for lake in lake_uniques}   # So slow...
-        old_Lk_count = lake_uniques.shape[0]
-        lake_uniques = numpy.array([lake for lake,val in Lk_chan.items() if val])   # New set of lakes to use
-        new_Lk_count = lake_uniques.shape[0]
-        Lake_arr[~numpy.array([item in lake_uniques for item in Lake_arr])] = NoDataVal    # Remove lakes from Lake Array that are not on channels. Could use Lake_arr[~numpy.isin(Lake_arr, lake_uniques)] for python3
-        del Lk_chan, old_Lk_count, new_Lk_count
-
-        # Reset the 1...n index and eliminate lakes from shapefile that were eliminated here
-        num = 0                                                                 # Initialize the lake ID counter
-        counter = 0
-        printMessages(arcpy, ['    Proceeding to eliminate lakes that are not connected to a channel pixel.'])
-        with arcpy.da.UpdateCursor(outfeatures, lakeID) as cursor:
-            for row in cursor:
-                if row[0] not in lake_uniques:
-                    cursor.deleteRow()
-                    counter += 1
-                else:
-                    num += 1
-                    row[0] = num
-                    cursor.updateRow(row)
-        printMessages(arcpy, ['    Found {0} lakes on active channels.'.format(num)])
-        printMessages(arcpy, ['    Eliminated {0} lakes because they were not connected to a channel pixel.'.format(counter)])
-        arcpy.Delete_management(outRastername)                                  # Delete it so that it can be recreated
-        arcpy.PolygonToRaster_conversion(in_features=outfeatures,
-            value_field=lakeID,
-            out_rasterdataset=outRastername,
-            priority_field="NONE",
-            cell_assignment="MAXIMUM_AREA")   # This tool requires ArcGIS for Desktop Advanced OR Spatial Analyst Extension
-
-    # Gather areas from AREASQKM field (2/23/2018 altered in order to provide non-gridded areas)
-    #areas = {row[0]: row[1]*1000000 for row in arcpy.da.SearchCursor("Lakeslyr", [lakeID, Field1])}     # Convert to square meters
-    areas = {row[0]: row[1]*1000000 for row in arcpy.da.SearchCursor(outfeatures, [lakeID, Field1])}     # Convert to square meters
-    lakeIDList = list(areas.keys())                                             # 2/23/2018: Added to find which lakes go missing after resolving on the grid
-
-    # Hack to convert Lakesras to 16bit integer
-    outRaster1 = (channelgrid * 0) + Raster(outRastername)                      # Create 16bit ratser for Lakesras out of channelgrid
-    outRaster = Con(IsNull(outRaster1) == 1, NoDataVal, outRaster1)             # Convert Null or NoData to -9999
-
-    # Pull flow accumulation values masked to lake polygons
-    zonstat = ZonalStatistics(outRastername, "Value", flac, "MAXIMUM")          # Get maximum flow accumulation value for each lake
-    lakeacc = Con(outRastername, flac)                                          # Flow accumulation over lakes only
-    TestCon = Con(lakeacc == zonstat, outRastername, NoDataVal)                 # Bottom of lake channelgrid pixel = lake number
-    NewChannelgrid = Con(IsNull(TestCon) == 1, channelgrid, TestCon)            # This is the new lake-routed channelgrid layer
-
-    # Now march down a set number of pixels to get minimum lake elevation
-    tolerance = int(float(arcpy.GetRasterProperties_management(channelgrid, 'CELLSIZEX').getOutput(0)) * LK_walker)
-    SnapPour = SnapPourPoint(SetNull(TestCon, TestCon, "VALUE = %s" %NoDataVal), flac, tolerance)   # Snap lake outlet pixel to FlowAccumulation with tolerance
-    del flac
-    outTable2 = r'in_memory/zonalstat2'
-    Sample(fill2, SnapPour, outTable2, "NEAREST")
-    min_elevs = {row[1]: row[-1] for row in arcpy.da.SearchCursor(outTable2, "*")}
-
-    # Convert lakes raster to polygons and gather size & elevations
-    printMessages(arcpy, ['    Gathering lake parameter information.'])
-    outTable = r'in_memory/zonalstat'
-    zontable = ZonalStatisticsAsTable(outRastername, 'VALUE', fill2, outTable, "DATA", "MIN_MAX_MEAN")
-    max_elevs = {row[0]: row[1] for row in arcpy.da.SearchCursor(outTable, ['VALUE', 'MAX'])}                   # Searchcursor on zonal stats table
-
-    # 2/23/2018: Find the missing lakes and sample elevation at their true centroid.
-    min_elev_keys = list(min_elevs.keys())                                      # 5/31/2019: Supporting Python3
-    printMessages(arcpy, ['    Lakes in minimum elevation dict: {0}'.format(len(min_elev_keys))])
-    MissingLks = [item for item in lakeIDList if item not in min_elev_keys]  # 2/23/2018: Find lakes that were not resolved on the grid
-    shapes = {}
-    if len(MissingLks) > 0:
-        printMessages(arcpy, ['    Found {0} lakes that could not be resolved on the grid: {1}\n      Sampling elevation from the centroid of these features.'.format(len(MissingLks), str(MissingLks))])
-        arcpy.SelectLayerByAttribute_management("Lakeslyr", "NEW_SELECTION", '"%s" IN (%s)' %(lakeID, str(MissingLks)[1:-1]))  # Select the missing lakes from the input shapefile
-        FID_to_ID = {row[0]: row[1] for row in arcpy.da.SearchCursor("Lakeslyr", ['OID@', lakeID])}
-        centroids = os.path.join('in_memory', 'lake_centroids')                     # Input lake centroid points
-        out_centroids = os.path.join('in_memory', 'lake_elevs')                     # Input lake centroid points
-        arcpy.FeatureToPoint_management("Lakeslyr", centroids, "INSIDE")            # Convert polygons to points inside each polygon
-        Sample(fill2, centroids, out_centroids, "NEAREST", 'ORIG_FID')              # Sample the elevation value for each lake centroid point. Result is a table
-        centroidElev = {FID_to_ID[row[1]]: row[-1] for row in arcpy.da.SearchCursor(out_centroids, '*')}   # Dictionary of LakeID:Centroid Elevatoin point for all forecast points
-        shapes.update({row[0]: row[1] for row in arcpy.da.SearchCursor(centroids, [lakeID, 'SHAPE@XY'])})		# Get the XY values to add to attributes later
-        max_elevs.update(centroidElev)                                              # Add single elevation value as max elevation
-        min_elevs.update(centroidElev)                                              # Make these lakes the minimum depth
-        arcpy.Delete_management(out_centroids)
-        arcpy.Delete_management(centroids)
-        del centroidElev, MissingLks
-
-    # Give a minimum active lake depth to all lakes with no elevation variation
-    elevRange = {key:max_elevs[key]-val for key, val in min_elevs.items()}      # Get lake depths
-    noDepthLks = {key:val for key, val in elevRange.items() if val < minDepth}  # Make a dictionary of these lakes
-    if len(noDepthLks) > 0:
-        printMessages(arcpy, ['    Found {0} lakes with no elevation range. Providing minimum depth of {1}m for these lakes.'.format(len(noDepthLks), minDepth)])
-        min_elevs.update({key:max_elevs[key]-minDepth for key, val in noDepthLks.items() if val == 0}) # Give these lakes a minimum depth
-        noDepthFile = os.path.join(projdir, 'Lakes_with_minimum_depth.csv')
-        with open(noDepthFile, 'w') as f:
-            w = csv.writer(f)
-            w.writerow([lakeID, "original_depth"])
-            w.writerows(list(noDepthLks.items()))
-            del noDepthFile
-    del elevRange, noDepthLks
-
-    # Calculate the Orifice and Wier heights
-    min_elev_keys = list(min_elevs.keys())                                      # Re-generate list because it may have changed.
-    OrificEs = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x])/3)) for x in min_elev_keys}             # Orific elevation is 1/3 between the low elevation and max lake elevation
-    WeirE_vals = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x]) * 0.9)) for x in min_elev_keys}       # WierH is 0.9 of the distance between the low elevation and max lake elevation
-
-    #  Gather centroid lat/lons
-    out_lake_raster = os.path.join(projdir, "out_lake_raster.shp")
-    out_lake_raster_dis = os.path.join(projdir, "out_lake_raster_dissolve.shp")
-    arcpy.RasterToPolygon_conversion(outRastername, out_lake_raster, "NO_SIMPLIFY", "VALUE")
-    arcpy.Dissolve_management(out_lake_raster, out_lake_raster_dis, "GRIDCODE", "", "MULTI_PART")               # Dissolve to eliminate multipart features
-    arcpy.Delete_management(out_lake_raster)                                                                    # Added 9/4/2015
-
-    # Create a point geometry object from gathered lake centroid points
-    printMessages(arcpy, ['    Starting to gather lake centroid information.'])
-    sr1 = arcpy.SpatialReference()                                              # Project lake points to whatever coordinate system is specified by wkt_text in globals
-    sr1.loadFromString(wkt_text)                                                # Load the Sphere datum CRS using WKT
-    point = arcpy.Point()
-    cen_lats = {}
-    cen_lons = {}
-    shapes.update({row[0]: row[1] for row in arcpy.da.SearchCursor(out_lake_raster_dis, ['GRIDCODE', 'SHAPE@XY'])})
-    arcpy.Delete_management(out_lake_raster_dis)                                                                # Added 9/4/2015
-    for shape in shapes:
-        point.X = shapes[shape][0]
-        point.Y = shapes[shape][1]
-        pointGeometry = arcpy.PointGeometry(point, sr2)
-        projpoint = pointGeometry.projectAs(sr1)                                # Optionally add transformation method:
-        cen_lats[shape] = projpoint.firstPoint.Y
-        cen_lons[shape] = projpoint.firstPoint.X
-    printMessages(arcpy, ['    Done gathering lake centroid information.'])
-
-    # Create Lake parameter file
-    printMessages(arcpy, ['    Starting to create lake parameter table.'])
-    printMessages(arcpy, ['        Lakes Table: {0} lakes'.format(len(list(areas.keys())))])
-
-    # Call function to build lake parameter netCDF file
-    if 'nc' in out_LKtype:
-        LakeNC = os.path.join(projdir, LK_nc)
-        build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lats, cen_lons, WeirE_vals)
-    if 'ascii' in out_LKtype:
-        LakeTBL = os.path.join(projdir, LK_tbl)
-        build_LAKEPARM_ascii(LakeTBL, min_elevs, areas, max_elevs, OrificEs, cen_lats, cen_lons, WeirE_vals)
-        printMessages(arcpy, ['        Done writing LAKEPARM.TBL table to disk.'])
-
-    # Process: Output Channelgrid
-    channelgrid_arr = arcpy.RasterToNumPyArray(NewChannelgrid)
-    outRaster_arr = arcpy.RasterToNumPyArray(outRaster)
-
-    # Clean up by deletion
-    printMessages(arcpy, ['    Lake parameter table created without error in {0:3.2f} seconds.'.format(time.time()-tic1)])
-    Add_Param_data_to_FC(arcpy, LakeNC, outfeatures, FCIDfield=lakeID, NCIDfield='lake_id', addFields=Lakes_addFields)
-
-    # Clean up
-    del sr1, point, outRaster1
-    arcpy.Delete_management("Lakeslyr")
-    arcpy.Delete_management(outshp)
-    arcpy.Delete_management('in_memory')
-    arcpy.Delete_management(outRastername)
-    del projdir, fill2, cellsize, sr2, in_lakes, lakeIDList, outRaster, channelgrid
-    return arcpy, channelgrid_arr, outRaster_arr
-
 def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize, sr2, lakeIDfield=None, Gridded=True):
     """
     This function is intended to add reservoirs into the model grid stack, such
@@ -3313,8 +3101,34 @@ def sa_functions(arcpy,
     printMessages(arcpy, ['    Process: FLOWDIRECTION written to output netCDF.'])
     del fdir_arr
 
+    # Use starting points to initiate channels
+    startPts = False                # Set functionality as inactive for now
+    if not startPts:
+        flac = FlowAccumulation(fdir, '#', data_type='FLOAT', flow_direction_type="D8")
+        strm = SetNull(flac, '1', 'VALUE < %s' % threshold)
+    else:
+        # Create a raster of channel initiation points (1/Nodata)
+        descData = arcpy.Describe(startPts)                                     # Get the description of the input feature class
+        outRaster = os.path.join('in_memory', 'StartPts')                       # In-memory raster
+
+        # Execute PointToRaster to put channel initiation points onto the routing grid
+        arcpy.PointToRaster_conversion(in_features=startPts,
+                                        value_field=descData.OIDFieldName,
+                                        out_rasterdataset=outRaster,
+                                        cellsize=cellsize)
+        strmPts = Raster(outRaster)                                             # Create raster object
+        strmPts = Con(IsNull(strmPts)==0, 1, strmPts)                           # Convert to values of 1 (channel start) and NoData
+
+        # Use a weighted flow accumulation
+        flac = FlowAccumulation(in_flow_direction_raster=fdir,
+                                in_weight_raster=strmPts,
+                                data_type='FLOAT',
+                                flow_direction_type="D8")
+        strm = SetNull(flac, '1', 'VALUE = 0')                                  # Convert to values of 1 (channel start) and NoData
+        arcpy.Delete_management(outRaster)
+        del descData, outRaster, strmPts
+
     # Process: Flow Accumulation (intermediate
-    flac = FlowAccumulation(fdir, '#', 'FLOAT')
     flac_var = rootgrp.variables['FLOWACC']
     flac_arr = arcpy.RasterToNumPyArray(flac)
     flac_var[:] = flac_arr
@@ -3335,7 +3149,6 @@ def sa_functions(arcpy,
     del fill2_arr
 
     # Create stream channel raster according to threshold
-    strm = SetNull(flac, '1', 'VALUE < %s' % threshold)
     channelgrid = Con(IsNull(strm) == 0, 0, NoDataVal)
 
     # Create initial constant raster of -9999
