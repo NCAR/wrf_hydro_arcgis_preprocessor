@@ -3092,7 +3092,6 @@ def sa_functions(arcpy,
     # Process: Fill DEM
     fill = Fill(mosprj, z_limit)                                                # Sink-filling using z-limit (global)
     fill1 = Float(fill)
-    #del fill
 
     # Process: Flow Direction
     fdir = FlowDirection(fill1)
@@ -3103,9 +3102,9 @@ def sa_functions(arcpy,
     del fdir_arr
 
     # Use starting points to initiate channels
+    flac = FlowAccumulation(fdir, '#', data_type='FLOAT', flow_direction_type="D8")
     if not startPts:
         printMessages(arcpy, ['    Flow accumulation will be thresholded to build channel pixels.'])
-        flac = FlowAccumulation(fdir, '#', data_type='FLOAT', flow_direction_type="D8")
         strm = SetNull(flac, '1', 'VALUE < %s' % threshold)
     else:
         printMessages(arcpy, ['    Flow accumulation will be weighted using input channel initiation points.'])
@@ -3115,21 +3114,24 @@ def sa_functions(arcpy,
         outRaster = os.path.join('in_memory', 'StartPts')                       # In-memory raster
 
         # Execute PointToRaster to put channel initiation points onto the routing grid
+        arcpy.env.snapRaster = fill
+        arcpy.env.extent = fill
         arcpy.PointToRaster_conversion(in_features=startPts,
                                         value_field=descData.OIDFieldName,
                                         out_rasterdataset=outRaster,
                                         cellsize=cellsize)
         strmPts = Raster(outRaster)                                             # Create raster object
-        strmPts = Con(IsNull(strmPts)==0, 1, strmPts)                           # Convert to values of 1 (channel start) and NoData
+        #strmPts = Con(IsNull(strmPts)==0, 1, strmPts)                           # Convert to values of 1 (channel start) and NoData
+        strmPts = Con(IsNull(strmPts)==0, 1, 0)                                 # Convert to values of 1 (channel start) and 0
 
         # Use a weighted flow accumulation
-        flac = FlowAccumulation(in_flow_direction_raster=fdir,
+        flac_wt = FlowAccumulation(in_flow_direction_raster=fdir,
                                 in_weight_raster=strmPts,
                                 data_type='FLOAT',
                                 flow_direction_type="D8")
-        strm = SetNull(flac, '1', 'VALUE = 0')                                  # Convert to values of 1 (channel start) and NoData
+        strm = SetNull(flac_wt, '1', 'VALUE = 0')                               # Convert to values of 1 (channel start) and NoData
         arcpy.Delete_management(outRaster)
-        del descData, outRaster, strmPts
+        del descData, outRaster, strmPts, flac_wt
 
     # Process: Flow Accumulation (intermediate
     flac_var = rootgrp.variables['FLOWACC']

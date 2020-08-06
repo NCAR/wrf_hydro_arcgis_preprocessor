@@ -330,7 +330,7 @@ class ProcessGeogridFile(object):
         wrfh.printMessages(arcpy, ['{0}'.format(in_lakes)])
 
         # Interpret the input for channel initiation points
-        if channel_starts.lower == "none":
+        if str(channel_starts).lower() == "none":
             chpts = None
         else:
             chpts = channel_starts
