@@ -2510,6 +2510,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
         shapes.update({row[0]: row[1] for row in arcpy.da.SearchCursor(centroids, [lakeID, 'SHAPE@XY'])})		# Get the XY values to add to attributes later
         max_elevs.update(centroidElev)                                              # Add single elevation value as max elevation
         min_elevs.update(centroidElev)                                              # Make these lakes the minimum depth
+        min_elev_keys = list(min_elevs.keys())  #YF: update it for orificEs and WeirE_vals
         arcpy.Delete_management(out_centroids)
         arcpy.Delete_management(centroids)
         del centroidElev, MissingLks
@@ -2520,6 +2521,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
     if len(noDepthLks) > 0:
         printMessages(arcpy, ['    Found {0} lakes with elevation range below minimum. Providing minimum depth of {1}m for these lakes.'.format(len(noDepthLks), minDepth)])
         min_elevs.update({key:max_elevs[key]-minDepth for key, val in noDepthLks.items() if val == 0}) # Give these lakes a minimum depth
+        min_elev_keys = list(min_elevs.keys())  #YF: update it for orificEs and WeirE_vals
         noDepthFile = os.path.join(projdir, 'Lakes_with_minimum_depth.csv')
         with open(noDepthFile, 'w') as f:
             w = csv.writer(f)
