@@ -2510,7 +2510,6 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
         shapes.update({row[0]: row[1] for row in arcpy.da.SearchCursor(centroids, [lakeID, 'SHAPE@XY'])})		# Get the XY values to add to attributes later
         max_elevs.update(centroidElev)                                              # Add single elevation value as max elevation
         min_elevs.update(centroidElev)                                              # Make these lakes the minimum depth
-        min_elev_keys = list(min_elevs.keys())  #YF: update it for orificEs and WeirE_vals
         arcpy.Delete_management(out_centroids)
         arcpy.Delete_management(centroids)
         del centroidElev, MissingLks
@@ -2521,7 +2520,6 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
     if len(noDepthLks) > 0:
         printMessages(arcpy, ['    Found {0} lakes with elevation range below minimum. Providing minimum depth of {1}m for these lakes.'.format(len(noDepthLks), minDepth)])
         min_elevs.update({key:max_elevs[key]-minDepth for key, val in noDepthLks.items() if val == 0}) # Give these lakes a minimum depth
-        min_elev_keys = list(min_elevs.keys())  #YF: update it for orificEs and WeirE_vals
         noDepthFile = os.path.join(projdir, 'Lakes_with_minimum_depth.csv')
         with open(noDepthFile, 'w') as f:
             w = csv.writer(f)
@@ -2531,7 +2529,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
     del elevRange, noDepthLks
 
     # Calculate the Orifice and Wier heights
-    min_elev_keys = list(min_elevs.keys())                                  # Re-generate list because it may have changed.
+    min_elev_keys = list(min_elevs.keys())                                  # Re-generate list because it may have changed. #YF: update it for orificEs and WeirE_vals
     OrificEs = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x])/3)) for x in min_elev_keys}             # Orific elevation is 1/3 between the low elevation and max lake elevation
     WeirE_vals = {x:(min_elevs[x] + ((max_elevs[x] - min_elevs[x]) * 0.9)) for x in min_elev_keys}       # WierH is 0.9 of the distance between the low elevation and max lake elevation
 
