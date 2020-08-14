@@ -532,7 +532,7 @@ class WRF_Hydro_Grid:
         self.proj4 = proj4
         self.point = point2
         self.map_pro = map_pro
-        printMessages(arcpy, ['    Step 1 completed without error.'])
+        printMessages(arcpy, ['    Georeferencing step completed without error.'])
         del point, sr1, projpoint, pointGeometry
 
     def regrid(self, regrid_factor):
