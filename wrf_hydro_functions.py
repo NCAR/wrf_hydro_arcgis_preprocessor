@@ -59,7 +59,8 @@ GWGRID_nc = 'GWBASINS.nc'
 GW_ASCII = 'gw_basns_geogrid.txt'                                               # Default Groundwater Basins ASCII grid output
 GW_TBL = 'GWBUCKPARM.TBL'
 StreamSHP = 'streams.shp'                                                       # Default streams shapefile name
-TempLakeFile = r'in_memory/in_lakes_clip'                                       # Temporary output lake file (clipped to domain)
+#TempLakeFile = r'in_memory/in_lakes_clip'                                       # Temporary output lake file (clipped to domain)
+TempLakeFile = 'in_lakes_clip.shp'                                              # Temporary output lake file (clipped to domain)
 LakesShp = 'lakes.shp'                                                          # Default lake shapefile name
 ###################################################
 
@@ -437,7 +438,8 @@ class WRF_Hydro_Grid:
 
             # 3/30/2020: Testing out utility of providing "Stereographic_North_Pole" or "Stereographic_South_Pole"
             # definitions. However, this may not work for all WRF-supported aspects of stereographic CRS.
-            if pole_latitude > 0:
+            #if pole_latitude > 0:
+            if latitude_of_origin > 0:
                 pole_orientation = 'North'
             else:
                 pole_orientation = 'South'
