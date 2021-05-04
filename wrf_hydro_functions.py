@@ -59,14 +59,15 @@ GWGRID_nc = 'GWBASINS.nc'
 GW_ASCII = 'gw_basns_geogrid.txt'                                               # Default Groundwater Basins ASCII grid output
 GW_TBL = 'GWBUCKPARM.TBL'
 StreamSHP = 'streams.shp'                                                       # Default streams shapefile name
-#TempLakeFile = r'in_memory/in_lakes_clip'                                       # Temporary output lake file (clipped to domain)
-TempLakeFile = 'in_lakes_clip.shp'                                              # Temporary output lake file (clipped to domain)
+TempLakeFile = r'in_memory/in_lakes_clip'                                       # Temporary output lake file (clipped to domain)
+#TempLakeFile = 'in_lakes_clip.shp'                                              # Temporary output lake file (clipped to domain)
 LakesShp = 'lakes.shp'                                                          # Default lake shapefile name
 ###################################################
 
 ###################################################
 # Other Options
-PpVersion = 'v5.1.1 (12/2019)'                                                  # WRF-Hydro ArcGIS Pre-processor version to add to FullDom metadata
+WRFH_Version = 5.2                                                              # WRF-Hydro version to be executed using the outputs of this tool
+PpVersion = 'v5.2 (04/2021)'                                                    # WRF-Hydro ArcGIS Pre-processor version to add to FullDom metadata
 CFConv = 'CF-1.5'                                                               # CF-Conventions version to place in the 'Conventions' attribute of RouteLink files
 NoDataVal = -9999                                                               # Default NoData value for gridded variables
 walker = 3                                                                      # Number of cells to walk downstream before gaged catchment delineation
@@ -141,7 +142,7 @@ OrificA = 1.0
 WeirC = 0.4
 WeirL = 10.0                                                                    # New default prescribed by D. Yates 5/11/2017 (10m default weir length). Old default weir length (0.0m).
 ifd_Val = 0.90                                                                  # Default initial fraction water depth (90%)
-#dam_length = 10.0                                                               # Default length of the dam
+dam_length = 10.0                                                               # Default length of the dam
 out_LKtype = ['nc']                                                             # Default output lake parameter file format ['nc', 'ascii']
 defaultLakeID = "NEWID"                                                         # Default new LakeID field for lakes, numbered 1..n
 Lakes_addFields = ['lake_id']                                                   # Variables from LAKEPARM file to add to the output lake shapefile (for convenience, plotting in GIS)
@@ -207,6 +208,8 @@ fields = {'link': ['link', 'LONG', 'i8'],
             'WeirE': ['WeirE', 'FLOAT', 'f4'],
             'ascendingIndex': ['ascendingIndex', 'SHORT', 'i4'],
             'ifd': ['ifd', 'FLOAT', 'f4']}
+if WRFH_Version >= 5.2:
+    fields.update({'Dam_Length': ['Dam_Length', 'FLOAT', 'f4']})
 
 if lake_id_64:
     # Alter the field type information for writing out a feature class later
@@ -1706,7 +1709,7 @@ def build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, ToSeg, NodesLL, 
     printMessages(arcpy, ['        Done writing NC file to disk.'])
     printMessages(arcpy, ['    Routing table created without error.'])
 
-def assign_lake_IDs(arcpy, in_lakes, lakeIDfield=None):
+def assign_lake_IDs(arcpy, in_lakes, lakeIDfield=None, CalcPyVersion="PYTHON_9.3"):
     '''
     This function will either assign a new, unique lake ID field to an existing
     lake feature layer, or return an existing (provided) lake ID field if it
@@ -1721,7 +1724,7 @@ def assign_lake_IDs(arcpy, in_lakes, lakeIDfield=None):
         arcpy.AddField_management(in_lakes, lakeID, "LONG")
         expression = 'autoIncrement()'
         code_block = """rec = 0\ndef autoIncrement():\n    global rec\n    pStart = 1\n    pInterval = 1\n    if (rec == 0):\n        rec = pStart\n    else:\n        rec = rec + pInterval\n    return rec"""
-        arcpy.CalculateField_management(in_lakes, lakeID, expression, "PYTHON_9.3", code_block)
+        arcpy.CalculateField_management(in_lakes, lakeID, expression, CalcPyVersion, code_block)
     else:
         printMessages(arcpy, ['    Using provided lake ID field: {0}'.format(lakeIDfield)])
         lakeID = lakeIDfield                                                    # Use existing field specified by 'lakeIDfield' parameter
@@ -2189,7 +2192,8 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     WeirEs = rootgrp.createVariable('WeirE', 'f8', (dim1))                      # Variable (64-bit floating point)
     AscendOrder = rootgrp.createVariable('ascendingIndex', 'i4', (dim1))        # Variable (32-bit signed integer)
     ifd = rootgrp.createVariable('ifd', 'f4', (dim1))                           # Variable (32-bit floating point)
-    #Dam = rootgrp.createVariable('Dam_Length', 'i4', (dim1))                    # Variable (32-bit signed integer)
+    if WRFH_Version >= 5.2:
+        Dam = rootgrp.createVariable('Dam_Length', 'i4', (dim1))                    # Variable (32-bit signed integer)
 
     # Add CF-compliant coordinate system variable
     if pointCF:
@@ -2221,8 +2225,9 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     Times.units = 'days since 2000-01-01 00:00:00'                              # For compliance. Reference time arbitrary
     WeirEs.units = 'm'
     ids.cf_role = "timeseries_id"                                               # For compliance
-    #Dam.long_name = 'Length of the dam'
-    #Dam.units = 'Meters'
+    if WRFH_Version >= 5.2:
+        Dam.long_name = 'Length of the dam'
+        Dam.units = 'Meters'
 
     # Apply grid_mapping and coordinates attributes to all variables
     for varname, ncVar in rootgrp.variables.items():
@@ -2250,7 +2255,8 @@ def build_LAKEPARM(arcpy, LakeNC, min_elevs, areas, max_elevs, OrificEs, cen_lat
     longs[:] = numpy.array([cen_lons[lkid] for lkid in min_elev_keys])
     WeirEs[:] = numpy.array([WeirE_vals.get(lkid,0) for lkid in min_elev_keys])    # WierH is 0.9 of the distance between the low elevation and max lake elevation
     ifd[:] = ifd_Val
-    #Dam[:] = dam_length
+    if WRFH_Version >= 5.2:
+        Dam[:] = dam_length
 
     # Close file
     rootgrp.close()
@@ -2342,6 +2348,20 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
 
     """
 
+    # Get ArcGIS version information and checkout Spatial Analyst extension
+    ArcVersion = arcpy.GetInstallInfo()['Version']                              # Get the ArcGIS version that is being used
+    ArcProduct = arcpy.GetInstallInfo()['ProductName']
+    if ArcVersion.count('.') == 2:
+        ArcVersionF = float(ArcVersion.rpartition('.')[0])                      # ArcGIS major release version as a float
+    else:
+        ArcVersionF = float(ArcVersion)                                         # ArcGIS major release version as a float
+
+    # Added 3/27/21 to handle field calculations in ArcGIS Pro versions
+    if ArcVersionF > 10.3:
+        CalcPyVersion = "PYTHON_9.3"
+    else:
+        CalcPyVersion = "PYTHON3"
+
     tic1 = time.time()                                                          # Set timer
     printMessages(arcpy, ['  Adding reservoirs to routing stack.'])
     printMessages(arcpy, ['    Gridded: {0}'.format(Gridded)])
@@ -2375,12 +2395,12 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
     # Create new area field
     if Field1.lower() not in existing_fields:
         arcpy.AddField_management(TempLakeFile, Field1, "FLOAT")
-        arcpy.CalculateField_management(TempLakeFile, Field1, '!shape.area@squarekilometers!', "PYTHON_9.3")
+        arcpy.CalculateField_management(TempLakeFile, Field1, '!shape.area@squarekilometers!', CalcPyVersion)
 
     # Create new, unique FID field
     if newFID.lower() not in existing_fields:
         arcpy.AddField_management(TempLakeFile, newFID, "LONG")
-        arcpy.CalculateField_management(TempLakeFile, newFID, '!{0}!'.format(FID), "PYTHON_9.3")
+        arcpy.CalculateField_management(TempLakeFile, newFID, '!{0}!'.format(FID), CalcPyVersion)
 
     # Build a mapping between the new, sequential ID scheme and the original IDs
     IDmap = {row[0]: row[1] for row in arcpy.da.SearchCursor(TempLakeFile, (newFID, lakeID))}
