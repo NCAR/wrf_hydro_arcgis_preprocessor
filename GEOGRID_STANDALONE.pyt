@@ -59,6 +59,7 @@ else:
 # --- Globals --- #
 #outNCType = 'NETCDF3_64BIT'                                                     # Set output netCDF format for spatial metdata files. This was the default before 7/31/2018
 outNCType = 'NETCDF4_CLASSIC'                                                   # Define the output netCDF version for RouteLink.nc and LAKEPARM.nc
+wrfinput_outNCType = 'NETCDF4'                                                  # Data model for output netCDF data
 
 # Processing Notes to insert into netCDF global attributes
 # Processing notes for Spatial Metdata files
@@ -126,7 +127,8 @@ class Toolbox(object):
                         Reach_Based_Routing_Addition,
                         Lake_Parameter_Addition,
                         GWBUCKPARM,
-                        Gage_Addition]
+                        Gage_Addition,
+                        Create_wrfinput]
 
 class ProcessGeogridFile(object):
     def __init__(self):
@@ -1744,6 +1746,93 @@ class Gage_Addition(object):
         arcpy.AddMessage('Process completed without error.')
         arcpy.AddMessage('Output ZIP File: %s' %out_zip)
         del out_zip
+        return
+
+class Create_wrfinput(object):
+    def __init__(self):
+        """Define the tool (tool name is the name of the class)."""
+        self.label = "Create WRFINPUT from GEOGRID File"
+        self.description = "This tool takes an input GEOGRID (geo_em.d0*.nc) file," + \
+                           " typically created by the WPS geogrid.exe program," + \
+                           " and a start month (January=1, December=12) and builds" + \
+                           " the required wrfinput.nc file for WRF-Hydro."
+        self.canRunInBackground = True
+        self.category = "Utilities"
+
+    def getParameterInfo(self):
+        """Define parameter definitions"""
+
+        # Input parameter
+        in_nc = arcpy.Parameter(
+            displayName="Input GEOGRID File",
+            name="in_nc",
+            datatype="File",
+            parameterType="Required",
+            direction="Input")
+
+        # Input parameter
+        in_month = arcpy.Parameter(
+            displayName="Simulation start month",
+            name="in_month",
+            datatype="GPString",
+            parameterType="Required",
+            direction="Input")
+        in_month.filter.type = "ValueList"
+        in_month.filter.list = ['1: January',
+                                 '2: February',
+                                 '3: March',
+                                 '4: April',
+                                 '5: May',
+                                 '6: June',
+                                 '7: July',
+                                 '8: August',
+                                 '9: September',
+                                 '10: October',
+                                 '11: November',
+                                 '12: December']
+
+        # Output parameter
+        out_file = arcpy.Parameter(
+            displayName="Output wrfinput.nc File",
+            name="out_file",
+            datatype="File",
+            parameterType="Required",
+            direction="Output")
+
+        parameters = [in_nc, in_month, out_file]
+        return parameters
+
+    def isLicensed(self):
+        """Allow the tool to execute, only if the ArcGIS Spatial Analyst extension
+        is available."""
+        return True                                                             # tool can be executed
+
+    def updateParameters(self, parameters):
+        """Modify the values and properties of parameters before internal
+        validation is performed.  This method is called whenever a parameter
+        has been changed."""
+        return
+
+    def updateMessages(self, parameters):
+        """Modify the messages created by internal validation for each tool
+        parameter.  This method is called after internal validation."""
+        return
+
+    def execute(self, parameters, messages):
+        """The source code of the tool."""
+        reload(wrfh)                                                            # Reload in case code changes have been made
+        tic = time.time()                                                       # Initiate timer
+        isError = False                                                         # Starting Error condition (no errors)
+
+        # Gather all necessary parameters
+        in_nc = parameters[0].valueAsText
+        in_month = parameters[1].value
+        out_nc = parameters[2].valueAsText
+
+        in_month_int = int(in_month.split(':')[0])
+
+        wrfh.main_wrfinput_ncdfpy(arcpy, in_nc, out_nc, lai=in_month_int, outNCType=wrfinput_outNCType)
+        wrfh.printMessages(arcpy, ['  Process completed in {0:3.2f} seconds'.format(time.time()-tic)])
         return
 
 # --- End Toolbox Classes --- #
