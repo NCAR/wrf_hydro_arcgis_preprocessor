@@ -189,7 +189,6 @@ defaultLakeID = "NEWID"                                                         
 Lakes_addFields = ['lake_id']                                                   # Variables from LAKEPARM file to add to the output lake shapefile (for convenience, plotting in GIS)
 lake_id_64 = False                                                              # 6/26/2020: Allows for 64-bit integer lake ID types. Supporting NHDPlus HR.
 subsetLakes = True                                                              # Option to eliminate lakes that do not intersect gridded channel network (gridded runs only)
-addLoss = False                                                                 # Option to add loss function parameter to groundwater buckets. Not intended for Community WRF-Hydro use.s
 ###################################################
 
 ###################################################
@@ -202,6 +201,7 @@ Loss = 0                                                                        
 out_2Dtype = ['nc']                                                             # Default output 2D groundwater bucket grid format: ['nc', 'ascii']
 out_1Dtype = '.nc'                                                              # Default output 1D groundwater parameter (GWBUCKPARM.nc) format: ['.nc', '.nc and .TBL', '.TBL']
 maskGW_Basins = False                                                           # Option to mask the GWBASINS.nc grid to only active channels
+addLoss = False                                                                 # Option to add loss function parameter to groundwater buckets. Not intended for Community WRF-Hydro use.s
 ###################################################
 
 ###################################################
