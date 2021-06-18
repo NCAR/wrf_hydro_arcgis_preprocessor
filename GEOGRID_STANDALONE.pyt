@@ -320,6 +320,9 @@ class ProcessGeogridFile(object):
         channel_starts = parameters[11].valueAsText
         out_zip = parameters[12].valueAsText
 
+        # Clear any in-memory feature classes from previous runs (affects ArcGIS 10.7)
+        arcpy.Delete_management('in_memory')
+
         # Prepare output log file
         outtable = os.path.join(os.path.dirname(out_zip), os.path.basename(out_zip) + '.log')
         tee = wrfh.TeeNoFile(outtable, 'w')

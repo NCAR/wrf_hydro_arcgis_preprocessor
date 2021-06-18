@@ -59,7 +59,7 @@ GWGRID_nc = 'GWBASINS.nc'
 GW_ASCII = 'gw_basns_geogrid.txt'                                               # Default Groundwater Basins ASCII grid output
 GW_TBL = 'GWBUCKPARM.TBL'
 StreamSHP = 'streams.shp'                                                       # Default streams shapefile name
-TempLakeFile = r'in_memory\in_lakes_clip'                                       # Temporary output lake file (clipped to domain). Was 'in_lakes_clip.shp'
+TempLakeFile = os.path.join("in_memory", "in_lakes_clip")                       # Temporary output lake file (clipped to domain). Was 'in_lakes_clip.shp'
 LakesShp = 'lakes.shp'                                                          # Default lake shapefile name
 ###################################################
 
@@ -133,7 +133,7 @@ Kc = 0                                                                          
 minSo = 0.001                                                                   # Minimum slope allowed in RouteLink file
 
 # Order-based Mannings N values for Strahler orders 1-10
-ManningsOrd = True                                                              # Switch to activate order-based Mannings N values
+ManningsOrd = False                                                              # Switch to activate order-based Mannings N values
 Mannings_Order = {1:0.09,
                     2:0.07,
                     3:0.06,
@@ -146,7 +146,7 @@ Mannings_Order = {1:0.09,
                     10:0.02}                                                    # Values from LR 7/01/2020
 
 # Order-based Channel Side-Slope values for Strahler orders 1-10
-ChSSlpOrd = True                                                                # Switch to activate order-based Channel Side-Slope values
+ChSSlpOrd = False                                                                # Switch to activate order-based Channel Side-Slope values
 Mannings_ChSSlp = {1:0.03,
                     2:0.03,
                     3:0.03,
@@ -159,7 +159,7 @@ Mannings_ChSSlp = {1:0.03,
                     10:0.10}                                                    # Values from LR 7/01/2020
 
 # Order-based Bottom-width values for Strahler orders 1-10
-BwOrd = True                                                                    # Switch to activate order-based Bottom-width values
+BwOrd = False                                                                    # Switch to activate order-based Bottom-width values
 Mannings_Bw = {1:1.6,
                2:2.4,
                3:3.5,
