@@ -59,7 +59,7 @@ GWGRID_nc = 'GWBASINS.nc'
 GW_ASCII = 'gw_basns_geogrid.txt'                                               # Default Groundwater Basins ASCII grid output
 GW_TBL = 'GWBUCKPARM.TBL'
 StreamSHP = 'streams.shp'                                                       # Default streams shapefile name
-TempLakeFile = r'in_memory/in_lakes_clip'                                       # Temporary output lake file (clipped to domain). Was 'in_lakes_clip.shp'
+TempLakeFile = r'in_memory\in_lakes_clip'                                       # Temporary output lake file (clipped to domain). Was 'in_lakes_clip.shp'
 LakesShp = 'lakes.shp'                                                          # Default lake shapefile name
 ###################################################
 
@@ -1836,7 +1836,8 @@ def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, in_rast
     arcpy.env.outputCoordinateSystem = descData.spatialReference
 
     # Use extent of channelgrid raster to add a feature layer of lake polygons
-    outshp = os.path.join(outDir, TempLakeFile)
+    #outshp = os.path.join(outDir, TempLakeFile)
+    outshp = TempLakeFile
     arcpy.CopyFeatures_management(WB, outshp)
     lakeID = assign_lake_IDs(arcpy, outshp)
 
