@@ -133,20 +133,20 @@ Kc = 0                                                                          
 minSo = 0.001                                                                   # Minimum slope allowed in RouteLink file
 
 # Order-based Mannings N values for Strahler orders 1-10
-ManningsOrd = False                                                              # Switch to activate order-based Mannings N values
-Mannings_Order = {1:0.09,
-                    2:0.07,
-                    3:0.06,
-                    4:0.05,
-                    5:0.04,
-                    6:0.05,
-                    7:0.03,
-                    8:0.02,
-                    9:0.02,
-                    10:0.02}                                                    # Values from LR 7/01/2020
+ManningsOrd = True                                                              # Switch to activate order-based Mannings N values
+Mannings_Order = {1:0.096,
+                    2:0.076,
+                    3:0.060,
+                    4:0.047,
+                    5:0.037,
+                    6:0.030,
+                    7:0.025,
+                    8:0.021,
+                    9:0.018,
+                    10:0.022}                                                    # Values based on CONUS JTTI research, originally from LR 7/01/2020, confirmed by JMC 6/18/21
 
 # Order-based Channel Side-Slope values for Strahler orders 1-10
-ChSSlpOrd = False                                                                # Switch to activate order-based Channel Side-Slope values
+ChSSlpOrd = True                                                                # Switch to activate order-based Channel Side-Slope values
 Mannings_ChSSlp = {1:0.03,
                     2:0.03,
                     3:0.03,
@@ -159,7 +159,7 @@ Mannings_ChSSlp = {1:0.03,
                     10:0.10}                                                    # Values from LR 7/01/2020
 
 # Order-based Bottom-width values for Strahler orders 1-10
-BwOrd = False                                                                    # Switch to activate order-based Bottom-width values
+BwOrd = True                                                                    # Switch to activate order-based Bottom-width values
 Mannings_Bw = {1:1.6,
                2:2.4,
                3:3.5,
