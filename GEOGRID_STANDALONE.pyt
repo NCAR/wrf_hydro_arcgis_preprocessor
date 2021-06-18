@@ -31,10 +31,6 @@ except NameError:
     except ImportError:
         from imp import reload          # Python 3.0 - 3.3
 
-### Test if the packaging module is installed:
-##if sys.version_info[0] >= 3:
-##    from packaging import version
-
 # Specify import path and append to PATH
 configfile = '~/wrf_hydro_functions.py'
 sys.path.insert(1,os.path.dirname(os.path.expanduser(configfile)))
@@ -104,7 +100,16 @@ coordMethod2 = False                                                            
 # Adding global attributes from the GEOGRID file to the Spatial Metadata files and
 # to the Fulldom file can be useful, because then those files can be used as input
 # to other GIS tools, without requiring a WPS GEOGRID file.
-Globals_to_Add = ['MAP_PROJ', 'corner_lats', 'corner_lons', 'TRUELAT1', 'TRUELAT2', 'STAND_LON', 'POLE_LAT', 'POLE_LON', 'MOAD_CEN_LAT', 'CEN_LAT']
+Globals_to_Add = ['MAP_PROJ',
+                    'corner_lats',
+                    'corner_lons',
+                    'TRUELAT1',
+                    'TRUELAT2',
+                    'STAND_LON',
+                    'POLE_LAT',
+                    'POLE_LON',
+                    'MOAD_CEN_LAT',
+                    'CEN_LAT']
 # --- End Globals --- #
 
 # --- Toolbox Classes --- #
@@ -1798,6 +1803,7 @@ class Create_wrfinput(object):
             datatype="File",
             parameterType="Required",
             direction="Output")
+        out_file.value = 'wrfinput.nc'
 
         parameters = [in_nc, in_month, out_file]
         return parameters

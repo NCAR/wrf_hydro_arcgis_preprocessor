@@ -59,8 +59,7 @@ GWGRID_nc = 'GWBASINS.nc'
 GW_ASCII = 'gw_basns_geogrid.txt'                                               # Default Groundwater Basins ASCII grid output
 GW_TBL = 'GWBUCKPARM.TBL'
 StreamSHP = 'streams.shp'                                                       # Default streams shapefile name
-TempLakeFile = r'in_memory/in_lakes_clip'                                       # Temporary output lake file (clipped to domain)
-#TempLakeFile = 'in_lakes_clip.shp'                                              # Temporary output lake file (clipped to domain)
+TempLakeFile = r'in_memory/in_lakes_clip'                                       # Temporary output lake file (clipped to domain). Was 'in_lakes_clip.shp'
 LakesShp = 'lakes.shp'                                                          # Default lake shapefile name
 ###################################################
 
@@ -131,6 +130,48 @@ n = 0.035                                                                       
 ChSlp = 0.05                                                                    # Channel Side Slope (%; drop/length)
 BtmWdth = 5                                                                     # Bottom Width of Channel (m)
 Kc = 0                                                                          # channel conductivity (mm/hour)
+minSo = 0.001                                                                   # Minimum slope allowed in RouteLink file
+
+# Order-based Mannings N values for Strahler orders 1-10
+ManningsOrd = True                                                              # Switch to activate order-based Mannings N values
+Mannings_Order = {1:0.09,
+                    2:0.07,
+                    3:0.06,
+                    4:0.05,
+                    5:0.04,
+                    6:0.05,
+                    7:0.03,
+                    8:0.02,
+                    9:0.02,
+                    10:0.02}                                                    # Values from LR 7/01/2020
+
+# Order-based Channel Side-Slope values for Strahler orders 1-10
+ChSSlpOrd = True                                                                # Switch to activate order-based Channel Side-Slope values
+Mannings_ChSSlp = {1:0.03,
+                    2:0.03,
+                    3:0.03,
+                    4:0.04,
+                    5:0.04,
+                    6:0.04,
+                    7:0.04,
+                    8:0.04,
+                    9:0.05,
+                    10:0.10}                                                    # Values from LR 7/01/2020
+
+# Order-based Bottom-width values for Strahler orders 1-10
+BwOrd = True                                                                    # Switch to activate order-based Bottom-width values
+Mannings_Bw = {1:1.6,
+               2:2.4,
+               3:3.5,
+               4:5.3,
+               5:7.4,
+               6:11.,
+               7:14.
+               8:16.,
+               9:26.,
+               10:110.}                                                         # Values from LR 7/01/2020
+
+# Other channel options
 maskRL = False                                                                  # Allow masking of channels in RouteLink file. May cause WRF-Hydro to crash if True. This will also mask GWBASINS grid.
 Streams_addFields = ['link', 'to', 'gages', 'Lake']                             # Variables from RouteLink file to add to the output stream shapefile (for convenience, plotting in GIS)
 ###################################################
@@ -148,6 +189,7 @@ defaultLakeID = "NEWID"                                                         
 Lakes_addFields = ['lake_id']                                                   # Variables from LAKEPARM file to add to the output lake shapefile (for convenience, plotting in GIS)
 lake_id_64 = False                                                              # 6/26/2020: Allows for 64-bit integer lake ID types. Supporting NHDPlus HR.
 subsetLakes = True                                                              # Option to eliminate lakes that do not intersect gridded channel network (gridded runs only)
+addLoss = False                                                                 # Option to add loss function parameter to groundwater buckets. Not intended for Community WRF-Hydro use.s
 ###################################################
 
 ###################################################
@@ -156,6 +198,7 @@ coeff = 1.0000                                                                  
 expon = 3.000                                                                   # Bucket model exponent
 zmax = 50.00                                                                    # Conceptual maximum depth of the bucket
 zinit = 10.0000                                                                 # Initial depth of water in the bucket model
+Loss = 0                                                                        # Not intended for Community WRF-Hydro
 out_2Dtype = ['nc']                                                             # Default output 2D groundwater bucket grid format: ['nc', 'ascii']
 out_1Dtype = '.nc'                                                              # Default output 1D groundwater parameter (GWBUCKPARM.nc) format: ['.nc', '.nc and .TBL', '.TBL']
 maskGW_Basins = False                                                           # Option to mask the GWBASINS.nc grid to only active channels
@@ -238,7 +281,8 @@ dom_lc_fill = 8
 dzs = [0.1, 0.3, 0.6, 1.0]                                                      # Soil layer thickness top layer to bottom (m)
 nsoil = 4                                                                       # Number of soil layers (e.g., 4)
 
-fix_zero_over_water = True                                                      # Switch for fixing SoilT values of 0 over water areas
+# Switch for fixing SoilT values of 0 over water areas
+fix_zero_over_water = True
 ###################################################
 
 ###################################################
@@ -1703,18 +1747,33 @@ def build_RouteLink(arcpy, RoutingNC, order, From_To, NodeElev, ToSeg, NodesLL, 
     order_ = [1 if arcid in Straglers else StrOrder[From_To[arcid][0]] for arcid in order]  # Deal with issue of some segments being assigned higher orders than they should.
     orders[:] = numpy.array(order_)
     Sos_ = numpy.round(numpy.array(drops).astype(float)/Lengthsnc[:], 3)        # Must convert list to float to result in floats
-    numpy.place(Sos_, Sos_ == 0, [0.005])                                       # Set minimum slope to be 0.005
+    numpy.place(Sos_, Sos_<minSo, [minSo])                                      # Set minimum slope
     Sos[:] = Sos_[:]
 
     # Set default arrays
     Qis[:] = Qi
     MusKs[:] = MusK
     MusXs[:] = MusX
-    ns[:] = n
-    ChSlps[:] = ChSlp
-    BtmWdths[:] = BtmWdth
     Times[:] = 0
     Kcs[:] = Kc
+
+    # Apply order-based Mannings N values according to global dictionary "Mannings_Order"
+    if ManningsOrd:
+        ns[:] = numpy.array([Mannings_Order[item] for item in orders[:]])
+    else:
+        ns[:] = n
+
+    # Apply order-based Channel Side-slope values according to global dictionary "Mannings_Order"
+    if ChSSlpOrd:
+        ChSlps[:] = numpy.array([Mannings_ChSSlp[item] for item in orders[:]])
+    else:
+        ChSlps[:] = ChSlp
+
+    # Apply order-based bottom-width values according to global dictionary "Mannings_Order"
+    if BwOrd:
+        BtmWdths[:] = numpy.array([Mannings_Bw[item] for item in orders[:]])
+    else:
+        BtmWdths[:] = BtmWdth
 
     # Added 10/10/2017 by KMS to include user-supplied gages in reach-based routing files
     if gageDict is not None:
@@ -2722,6 +2781,8 @@ def build_GWBUCKPARM(arcpy, out_dir, cat_areas, cat_comids, tbl_type=out_1Dtype)
         Zinits = rootgrp.createVariable('Zinit', 'f4', (dim1))                  # Variable (32-bit floating point)
         Area_sqkms = rootgrp.createVariable('Area_sqkm', 'f4', (dim1))          # Variable (32-bit floating point)
         ComIDs = rootgrp.createVariable('ComID', 'i4', (dim1))                  # Variable (32-bit signed integer)
+        if addLoss:
+            LossF = rootgrp.createVariable('Loss', 'f4', (dim1))                  # Variable (32-bit signed integer)
 
         # Set variable descriptions
         Basins.long_name = 'Basin monotonic ID (1...n)'
@@ -2734,6 +2795,9 @@ def build_GWBUCKPARM(arcpy, out_dir, cat_areas, cat_comids, tbl_type=out_1Dtype)
             ComIDs.long_name = 'Catchment Gridcode'
         else:
             ComIDs.long_name = 'NHDCatchment FEATUREID (NHDFlowline ComID)'     # For NWM
+        if addLoss:
+            LossF.units = '-'
+            LossF.long_name = "Fraction of bucket output lost"
         Zmaxs.units = 'mm'
         Zinits.units = 'mm'
         Area_sqkms.units = 'km2'
@@ -2750,6 +2814,8 @@ def build_GWBUCKPARM(arcpy, out_dir, cat_areas, cat_comids, tbl_type=out_1Dtype)
         Zinits[:] = zinit
         Area_sqkms[:] = numpy.array(cat_areas)
         ComIDs[:] = numpy.array(cat_comids)
+        if addLoss:
+            LossF[:] = Loss
 
         # Close file
         rootgrp.close()
@@ -4187,7 +4253,6 @@ def main_wrfinput_ncdfpy(arcpy, geoFile, wrfinFile, lai=8, outNCType='NETCDF4'):
     netCDF4-python library.
     '''
     tic1 = time.time()
-
 
     # Local variables
     keepVars = ['XLAT_M','XLONG_M','HGT_M','LU_INDEX','MAPFAC_MX', 'MAPFAC_MY']     # Variables to keep from GEOGRID
