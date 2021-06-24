@@ -1938,8 +1938,9 @@ def Add_Param_data_to_FC(arcpy, inNC, inFC, FCIDfield='arcid', NCIDfield='link',
         for row in cursor:
             ID = row[0]
             item = RL_arr[RL_arr[NCIDfield]==ID]
-            newRow = [ID] + [item[varName][0] for varName in addFields]
-            cursor.updateRow(newRow)
+            if item.shape[0] > 0:
+                newRow = [ID] + [item[varName][0] for varName in addFields]
+                cursor.updateRow(newRow)
             counter += 1
             if counter % 10000 == 0:
                 #printMessages(arcpy, ['      {0} records processed in {1:3.2f} seconds.'.format(counter, time.time()-tic2)])
@@ -2541,7 +2542,8 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
     #del Lake_arr
 
     # Gather areas from AREASQKM field (2/23/2018 altered in order to provide non-gridded areas)
-    areas = {row[0]: row[1]*1000000 for row in arcpy.da.SearchCursor(TempLakeFile, [lakeID, Field1])}     # Convert to square meters
+    areas = {row[0]: (row[1]*1000000 if row[1] is not None else 0) for row in arcpy.da.SearchCursor(TempLakeFile, [lakeID, Field1])}     # Convert to square meters
+    #areas = {row[0]: row[1]*1000000 for row in arcpy.da.SearchCursor(TempLakeFile, [lakeID, Field1])}     # Convert to square meters
 
     # Added 2/23/2018 to find which lakes go missing after resolving on the grid.
     # Modified 6/26/2020 to re-map from requested IDs to the sequential IDs
