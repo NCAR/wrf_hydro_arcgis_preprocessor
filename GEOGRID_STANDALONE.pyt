@@ -1322,7 +1322,12 @@ class Lake_Parameter_Addition(object):
 
         # Prepare other rasters for the Lake Routing function
         channelgrid = arcpy.Raster(os.path.join(projdir, 'CHANNELGRID'))
-        flac = arcpy.Raster(os.path.join(projdir, 'flowacc'))
+        if not os.path.exists(os.path.join(projdir, 'flowacc')):
+            fdir = arcpy.Raster(os.path.join(projdir, 'FLOWDIRECTION'))
+            flac = FlowAccumulation(fdir, '#', data_type='FLOAT', flow_direction_type="D8")
+            del fdir
+        else:
+            flac = arcpy.Raster(os.path.join(projdir, 'flowacc'))
         fill2 = arcpy.Raster(os.path.join(projdir, 'topography'))
 
         # Check to see if this was a reach-based routing domain

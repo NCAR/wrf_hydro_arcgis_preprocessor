@@ -2489,6 +2489,7 @@ def add_reservoirs(arcpy, channelgrid, in_lakes, flac, projdir, fill2, cellsize,
         arcpy.CalculateField_management(TempLakeFile, newFID, '!{0}!'.format(FID), CalcPyVersion)
 
     # Build a mapping between the new, sequential ID scheme and the original IDs
+    print((newFID, lakeID))
     IDmap = {row[0]: row[1] for row in arcpy.da.SearchCursor(TempLakeFile, (newFID, lakeID))}
     IDmap2 = {val:key for key,val in IDmap.items()}
 
@@ -3324,7 +3325,8 @@ def sa_functions(arcpy,
         arcpy.CopyFeatures_management(frxst_layer, frsxt_FC)                    # To support ArcGIS 10.6, an XY event layer cannot be used in SnapRaster
         tolerance = int(float(arcpy.GetRasterProperties_management('mosaicprj', 'CELLSIZEX').getOutput(0)) * walker)
         tolerance1 = int(float(arcpy.GetRasterProperties_management('mosaicprj', 'CELLSIZEX').getOutput(0)))
-        frxst_raster = SnapPourPoint(frsxt_FC, flac, tolerance1, 'FID')
+        #frxst_raster = SnapPourPoint(frsxt_FC, flac, tolerance1, 'FID')
+        frxst_raster = SnapPourPoint(frsxt_FC, flac, tolerance1, arcpy.Describe(frsxt_FC).OIDFieldName)
         frxst_raster2 = Con(IsNull(frxst_raster) == 0, frxst_raster, NoDataVal)
         frxst_raster2_var = rootgrp.variables['frxst_pts']
         frxst_raster2_arr = arcpy.RasterToNumPyArray(frxst_raster2)
