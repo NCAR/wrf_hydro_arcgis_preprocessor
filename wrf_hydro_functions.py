@@ -1335,7 +1335,15 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     DEM is in the same datum as the model grid. This will happen if the user desires
     to use a WPS-processed grid (such as HGT_M) as the input high resolution elevation
     raster.
+
+    8/5/2022: Added an option ('shape_preserve') to use a shape-preserving option
+    to the Project tool, and avoid using the 'projectAs()' function for geometry.
+    This will avoid cutting off data that is further north than the most poleward
+    extent of the bounding polygon of the input raster.
+
     """
+
+    arcpy.env.overwriteOutput = True
 
     # Get ArcGIS version information and checkout Spatial Analyst extension
     ArcVersion = arcpy.GetInstallInfo()['Version']                              # Get the ArcGIS version that is being used
@@ -1367,6 +1375,14 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
 
     sr3 = arcpy.Describe(in_raster).spatialReference                            # Obtain the SRS object for the input high-resolution DEM
 
+    # Added 8/5/2022 to avoid cutting off elevation data along most poleward edge due to
+    # the way the projectAs function works. shape_preserve=True will use Project_management()
+    # and create a boundary polygon that preserves warped shape.
+    shape_preserve = True
+    if shape_preserve:
+        out_boundary = os.path.join(projdir, 'boundary_shape.shp')
+        projected_boundary = os.path.join(projdir, 'boundary_shape_proj.shp')
+
     # See if a custom geotransformation is necessary
     skip_custom_GT = assert_crs_attribs(arcpy, sr2, sr3, strict=False, datumOnly=True) # Evaluate the similarity of the underlying datums
 
@@ -1374,9 +1390,13 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     if not skip_custom_GT:
         printMessages(arcpy, ['    Custom geotransformation will be necessary.'])
         if ArcProduct == 'ArcGISPro':
-            arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
+            try:
+                arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
+            except:
+                pass
             printMessages(arcpy, ['    Transformation: {0}'.format(geoTransfmName)])
-            projpoly = boundaryPolygon.projectAs(sr3)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS using custom geotransformation
+            if not shape_preserve:
+                projpoly = boundaryPolygon.projectAs(sr3)                       # Reproject the boundary polygon from the WRF domain to the input raster CRS using custom geotransformation
         elif ArcVersionF > 10.3 and ArcVersionF < 10.6:
             # Create two new geographic coordinate systems; one for projecting the model boundary polygon geometry,
             #   and one for projecting the input high resolution DEM (in_raster). In each one, the datum from the
@@ -1391,22 +1411,32 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
             sr5 = arcpy.SpatialReference()                                          # Initiate the new SRS
             sr5.loadFromString(DEMSR2)                                              # Load SRS from altered string
             del modelSR_GCS, DEMSR_GCS, modelSR2, DEMSR2
-            projpoly = boundaryPolygon.projectAs(sr5)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS
+            if not shape_preserve:
+                projpoly = boundaryPolygon.projectAs(sr5)                       # Reproject the boundary polygon from the WRF domain to the input raster CRS
         elif ArcVersionF <= 10.3:
             printMessages(arcpy, ['    ArcGIS version {0} detected. Transformation: {1}'.format(ArcVersion, geoTransfmName)])
-            arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
-            projpoly = boundaryPolygon.projectAs(sr3, geoTransfmName)               # Reproject the boundary polygon from the WRF domain to the input raster CRS using custom geotransformation
+            #arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
+            if not shape_preserve:
+                projpoly = boundaryPolygon.projectAs(sr3, geoTransfmName)               # Reproject the boundary polygon from the WRF domain to the input raster CRS using custom geotransformation
         elif ArcVersionF >= 10.6:
             # Custom geotransformation appears not to be a valid input to the .projectAs geometry tool in ArcGIS 10.6
             # However, if you create a custom geotransformation beforehand, then it will be respected by the projectAs function
             printMessages(arcpy, ['    ArcGIS version {0} detected. Transformation: {1}'.format(ArcVersion, geoTransfmName)])
-            arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
-            projpoly = boundaryPolygon.projectAs(sr3) # Reproject the boundary polygon from the WRF domain to the input raster CRS
+            #arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
+            if not shape_preserve:
+                projpoly = boundaryPolygon.projectAs(sr3) # Reproject the boundary polygon from the WRF domain to the input raster CRS
     else:
         printMessages(arcpy, ['    Custom geotransformation will not be necessary.'])
-        projpoly = boundaryPolygon.projectAs(sr3)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS
-    polyextent = projpoly.extent
-    del projpoly, boundaryPolygon
+        if not shape_preserve:
+            projpoly = boundaryPolygon.projectAs(sr3)                               # Reproject the boundary polygon from the WRF domain to the input raster CRS
+    if shape_preserve:
+        arcpy.CopyFeatures_management(boundaryPolygon, out_boundary)
+        arcpy.Project_management(out_boundary, projected_boundary, sr3, preserve_shape='PRESERVE_SHAPE')
+        polyextent = arcpy.Describe(projected_boundary).extent
+    else:
+        polyextent = projpoly.extent
+        del projpoly
+    del boundaryPolygon
 
     # Create raster layer from input raster or mosaic dataset
     MosaicLayer = "MosaicLayer"
@@ -1440,7 +1470,10 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
             arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, ElevResampleMethod, cellsize2)
         else:
             printMessages(arcpy, ['    ArcGIS version {0} found. Using Custom Geotransformation ({1})'.format(ArcVersion, geoTransfmName)])
-            arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, ElevResampleMethod, cellsize2, geoTransfmName)
+            #arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, ElevResampleMethod, cellsize2, geoTransfmName)
+
+            #### NEW
+            arcpy.ProjectRaster_management(MosaicLayer, mosprj, sr2, ElevResampleMethod, cellsize2)
 
     printMessages(arcpy, ['    Finished projecting input elevation data to WRF coordinate system.'])
     printMessages(arcpy, ['    The fine grid (before ExtractByMask) has {0} rows and {1} columns.'.format(arcpy.Describe(mosprj).height, arcpy.Describe(mosprj).width)])
