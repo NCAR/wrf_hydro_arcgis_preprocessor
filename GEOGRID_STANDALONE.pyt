@@ -19,7 +19,8 @@ import netCDF4                                                                  
 import re                                                                       # Added 10/11/2016 for string matching in netCDF global attributes
 import importlib
 import copy                                                                     # Added 11/19/2019 to allow copying of class objects
-from distutils.version import LooseVersion
+#from distutils.version import LooseVersion
+from packaging.version import parse as LooseVersion
 
 # Test current version of Python's ability to reload a module
 # https://stackoverflow.com/questions/961162/reloading-module-giving-nameerror-name-reload-is-not-defined
@@ -236,7 +237,6 @@ class ProcessGeogridFile(object):
         retdeprtfac_val.value = 1.0
         retdeprtfac_val.category = "Parameter Values"
 
-        # Reserved for future functi
         channel_starts = arcpy.Parameter(
             displayName="Channel Initiation Points Feature Class",
             name="channel_starts",
@@ -244,6 +244,15 @@ class ProcessGeogridFile(object):
             parameterType="Optional",
             direction="Input")
         channel_starts.category = "Additional Functionality"
+
+        # Specify a channel mask input polygon layer.
+        channel_mask = arcpy.Parameter(
+            displayName="Channel Mask Raster",
+            name="channel_mask",
+            datatype="DERasterDataset",
+            parameterType="Optional",
+            direction="Input")
+        channel_mask.category = "Additional Functionality"
 
         out_zip = arcpy.Parameter(
             displayName="Output ZIP File",
@@ -253,7 +262,7 @@ class ProcessGeogridFile(object):
             direction="Output")
         out_zip.value = 'WRF_Hydro_routing_grids.zip'
 
-        parameters = [in_nc, in_csv, basin_mask, RB_routing, Lake_routing, in_reservoirs, in_raster, cellsize, threshold, ovroughrtfac_val, retdeprtfac_val, channel_starts, out_zip]   #, in_LakeIDField
+        parameters = [in_nc, in_csv, basin_mask, RB_routing, Lake_routing, in_reservoirs, in_raster, cellsize, threshold, ovroughrtfac_val, retdeprtfac_val, channel_starts, channel_mask, out_zip]   #, in_LakeIDField
         return parameters
 
     def isLicensed(self):
@@ -318,7 +327,8 @@ class ProcessGeogridFile(object):
         ovroughrtfac_val = parameters[9].value
         retdeprtfac_val = parameters[10].value
         channel_starts = parameters[11].valueAsText
-        out_zip = parameters[12].valueAsText
+        channel_mask = parameters[12].valueAsText
+        out_zip = parameters[13].valueAsText
 
         # Clear any in-memory feature classes from previous runs (affects ArcGIS 10.7)
         arcpy.Delete_management('in_memory')
@@ -344,6 +354,12 @@ class ProcessGeogridFile(object):
             chpts = None
         else:
             chpts = channel_starts
+
+        # Interpret the input for channel mask polygons
+        if str(channel_mask).lower() == "none":
+            mask_polys = None
+        else:
+            mask_polys = channel_mask
 
         # Create scratch directory for temporary outputs
         projdir = os.path.join(os.path.dirname(out_zip), 'scratchdir')
@@ -442,7 +458,7 @@ class ProcessGeogridFile(object):
             # Step 4 - Hyrdo processing functions
             rootgrp2 = wrfh.sa_functions(arcpy, rootgrp2, basin_mask, mosprj,
                 ovroughrtfac_val, retdeprtfac_val, projdir, in_csv, threshold,
-                routing, in_lakes=in_lakes, startPts=chpts)
+                routing, in_lakes=in_lakes, startPts=chpts, channel_mask=mask_polys)
             rootgrp2.close()
             del rootgrp2
         except Exception as e:

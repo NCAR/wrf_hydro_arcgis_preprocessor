@@ -33,7 +33,8 @@ except ImportError: # will be 3.x series
 from operator import itemgetter                                                 # Used in the group_min function
 import collections                                                              # Used in the group_min function
 
-from distutils.version import StrictVersion, LooseVersion
+#from distutils.version import StrictVersion, LooseVersion
+from packaging.version import parse as LooseVersion                             # To avoid deprecation warnings
 # --- End Import Modules --- #
 
 # --- Module Configurations --- #
@@ -3209,7 +3210,8 @@ def sa_functions(arcpy,
                     WKT='',
                     in_lakes=None,
                     lakeIDfield=None,
-                    startPts=None):
+                    startPts=None,
+                    channel_mask=None):
     """The last major function in the processing chain is to perform the spatial
     analyst functions to hydrologically process the input raster datasets."""
 
@@ -3220,9 +3222,9 @@ def sa_functions(arcpy,
 
     # Set Basin mask attribute to boolean from ArcGIS text
     if bsn_msk:
-        printMessages(arcpy, ['    Channelgrid will be masked to basins.'])
+        printMessages(arcpy, ['    Channelgrid will be masked to forecast basins.'])
     else:
-        printMessages(arcpy, ['    Channelgrid will not be masked to basins.'])
+        printMessages(arcpy, ['    Channelgrid will not be masked to forecast basins.'])
 
     if routing:
         printMessages(arcpy, ['    Reach-based routing files will be created.'])
@@ -3302,6 +3304,16 @@ def sa_functions(arcpy,
     fill2_var[:] = fill2_arr
     printMessages(arcpy, ['    Process: TOPOGRAPHY written to output netCDF.'])
     del fill2_arr
+
+    # Added 9/1/2022: Mask channels using a pre-established mask grid (1 and Nodata)
+    # on the routing grid. This option will limit channel cells and all resulting
+    # derivative grids to the area inside the mask raster layer given here.
+    if channel_mask is not None:
+        printMessages(arcpy, ['    Masking the stream grid to user-provided polygons:\n\t{0}.'.format(channel_mask)])
+
+        # Mask the stream layer to the user-provided mask layer
+        strm = ExtractByMask(strm, channel_mask, "INSIDE")
+        strm.save(os.path.join(projdir, 'strm'))
 
     # Create stream channel raster according to threshold
     channelgrid = Con(IsNull(strm) == 0, 0, NoDataVal)
