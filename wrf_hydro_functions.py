@@ -3268,6 +3268,7 @@ def sa_functions(arcpy,
         # Execute PointToRaster to put channel initiation points onto the routing grid
         arcpy.env.snapRaster = fill
         arcpy.env.extent = fill
+        arcpy.env.outputCoordinateSystem = sr2
         arcpy.PointToRaster_conversion(in_features=startPts,
                                         value_field=descData.OIDFieldName,
                                         out_rasterdataset=outRaster,
@@ -3277,11 +3278,14 @@ def sa_functions(arcpy,
         strmPts = Con(IsNull(strmPts)==0, 1, 0)                                 # Convert to values of 1 (channel start) and 0
 
         # Use a weighted flow accumulation
+        fdir.save(os.path.join('in_memory', 'fdir.tif'))                            # Saving to disk seems necessary for some reason 11/29/22
+        strmPts.save(os.path.join('in_memory', 'strmPts.tif'))                      # Saving to disk seems necessary for some reason 11/29/22
         flac_wt = FlowAccumulation(in_flow_direction_raster=fdir,
                                 in_weight_raster=strmPts,
-                                data_type='FLOAT',
+                                data_type="FLOAT",
                                 flow_direction_type="D8")
-        strm = SetNull(flac_wt, '1', 'VALUE = 0')                               # Convert to values of 1 (channel start) and NoData
+        strm = SetNull(flac_wt, '1', 'VALUE = 0')                               # Convert to values of 1 (channel start) and NoDat
+
         arcpy.Delete_management(outRaster)
         del descData, outRaster, strmPts, flac_wt
 

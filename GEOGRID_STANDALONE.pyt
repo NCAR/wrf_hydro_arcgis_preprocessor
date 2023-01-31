@@ -20,7 +20,7 @@ import re                                                                       
 import importlib
 import copy                                                                     # Added 11/19/2019 to allow copying of class objects
 #from distutils.version import LooseVersion
-from packaging.version import parse as LooseVersion
+from packaging.version import parse as LooseVersion                             # To avoid deprecation warnings
 
 # Test current version of Python's ability to reload a module
 # https://stackoverflow.com/questions/961162/reloading-module-giving-nameerror-name-reload-is-not-defined
