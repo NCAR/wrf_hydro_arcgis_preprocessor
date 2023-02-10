@@ -32,9 +32,11 @@ except ImportError: # will be 3.x series
 # Pure python method of getting unique sums - from http://stackoverflow.com/questions/4373631/sum-array-by-number-in-numpy
 from operator import itemgetter                                                 # Used in the group_min function
 import collections                                                              # Used in the group_min function
+try:
+    from packaging.version import parse as LooseVersion                             # To avoid deprecation warnings
+except:
+    from distutils.version import LooseVersion
 
-#from distutils.version import StrictVersion, LooseVersion
-from packaging.version import parse as LooseVersion                             # To avoid deprecation warnings
 # --- End Import Modules --- #
 
 # --- Module Configurations --- #
@@ -1390,7 +1392,7 @@ def create_high_res_topogaphy(arcpy, in_raster, hgt_m_raster, cellsize, sr2, pro
     # Create a projected boundary polygon of the model domain with which to clip the in_raster
     if not skip_custom_GT:
         printMessages(arcpy, ['    Custom geotransformation will be necessary.'])
-        if ArcProduct == 'ArcGISPro':
+        if ArcProduct == 'ArcGISPro' or ArcVersionF >= 10.9:
             try:
                 arcpy.CreateCustomGeoTransformation_management(geoTransfmName, sr2, sr3, customGeoTransfm)
             except:
