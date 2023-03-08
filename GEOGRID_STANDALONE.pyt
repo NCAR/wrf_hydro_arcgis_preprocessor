@@ -1290,7 +1290,16 @@ class Lake_Parameter_Addition(object):
             parameterType="Required",
             direction="Output")
 
-        parameters = [in_zip, in_reservoirs, out_zip]   # , in_LakeIDField
+        reach_based = arcpy.Parameter(
+            displayName="Is this a reach-based routing configuration?",
+            name="reach_based",
+            datatype="GPBoolean",
+            parameterType="Optional",
+            direction="Input")
+        reach_based.value = False
+        reach_based.category = "Additional Functionality"
+
+        parameters = [in_zip, in_reservoirs, out_zip, reach_based]   # , in_LakeIDField
         return parameters
 
     def isLicensed(self):
@@ -1323,6 +1332,7 @@ class Lake_Parameter_Addition(object):
         in_zip = parameters[0].valueAsText
         in_lakes = parameters[1].valueAsText
         out_zip = parameters[2].valueAsText
+        reach_based = parameters[3].value
 
         wrfh.printMessages(arcpy, ['Begining processing on {0}'.format(time.ctime())])
         wrfh.printMessages(arcpy, ['Beginning to extract WRF-Hydro routing grids...'])
@@ -1349,7 +1359,7 @@ class Lake_Parameter_Addition(object):
         fill2 = arcpy.Raster(os.path.join(projdir, 'topography'))
 
         # Check to see if this was a reach-based routing domain
-        if os.path.exists(os.path.join(projdir, 'LINKID')):
+        if os.path.exists(os.path.join(projdir, 'LINKID')) or reach_based:
             Gridded = False
         else:
             Gridded = True
