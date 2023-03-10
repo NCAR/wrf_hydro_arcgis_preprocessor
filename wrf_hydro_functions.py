@@ -1851,7 +1851,7 @@ def assign_lake_IDs(arcpy, in_lakes, lakeIDfield=None, CalcPyVersion="PYTHON_9.3
     printMessages(arcpy, ['    Checked lake input shapefile for unique ID in {0: 3.2f} seconds.'.format(time.time()-tic1)])
     return lakeID
 
-def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, in_raster):
+def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, in_raster, lakeID=defaultLakeID):
     '''
     8/7/2017: This function will add lakes to an NCAR Reach-based routing configuration.
 
@@ -1872,10 +1872,12 @@ def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, in_rast
     arcpy.env.outputCoordinateSystem = descData.spatialReference
 
     # Use extent of channelgrid raster to add a feature layer of lake polygons
-    #outshp = os.path.join(outDir, TempLakeFile)
-    outshp = TempLakeFile
-    arcpy.CopyFeatures_management(WB, outshp)
-    lakeID = assign_lake_IDs(arcpy, outshp)
+    if isinstance(WB, dict):
+        outshp = WB
+    else:
+        outshp = TempLakeFile
+        arcpy.CopyFeatures_management(WB, outshp)
+        lakeID = assign_lake_IDs(arcpy, outshp, lakeIDfield=lakeID)
 
     #arcpy.AddField_management(FL, lakeID, "SHORT")
     dtypes = numpy.dtype([(FLID, 'i4'), (hydroSeq, 'i4')])           # Create a numpy dtype object
@@ -1900,15 +1902,17 @@ def reaches_with_lakes(arcpy, FL, WB, outDir, ToSeg, sorted_Flowlinearr, in_rast
     # Select only the lakes that have been pre-processed onto the routing network
     counter = 0
     outWBs = list(set(WaterbodyDict.values()))
-    with arcpy.da.UpdateCursor(outshp, lakeID) as cursor:
-        for row in cursor:
-            if row[0] not in outWBs:
-                cursor.deleteRow()
-                counter += 1
+    if not isinstance(WB, dict):
+        with arcpy.da.UpdateCursor(outshp, lakeID) as cursor:
+            for row in cursor:
+                if row[0] not in outWBs:
+                    cursor.deleteRow()
+                    counter += 1
 
     # Output feature class representing the lakes after lake pre-processing
     Lakes = list(set(WaterbodyDict.values()))                                 # List of lakes to keep in output lakes polyogn feature class
-    build_lake_FC(arcpy, outshp, Old_New_LakeComID, Lake_List=Lakes, LkID=lakeID)
+    if not isinstance(WB, dict):
+        build_lake_FC(arcpy, outshp, Old_New_LakeComID, Lake_List=Lakes, LkID=lakeID)
 
     printMessages(arcpy, ['    size of lake link type array: {0}'.format(Lake_Link_Type_arr.shape[0])])
     printMessages(arcpy, ['    size of waterbody dict: {0}'.format(len(WaterbodyDict))])
