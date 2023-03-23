@@ -2045,6 +2045,9 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
         list3 = [x for x in list2 if x is not None]                                 # Remove None values from list
         return list3
 
+
+    # Get ArcGIS product information
+    ArcProduct = arcpy.GetInstallInfo()['ProductName']
     printMessages(arcpy, ['    Routing table will be created...'])
 
     # Get grid information from channelgrid
@@ -2090,12 +2093,27 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
     if gages is not None:
         printMessages(arcpy, ['        Adding forecast points:LINKID association.'])
 
-        # Input forecast points raster must be forecast point IDs and NoData only
-        out_frxst_linkIDs = os.path.join('in_memory', 'frxst_linkIDs')
-
         # Sample the LINKID value for each forecast point. Result is a table
-        Sample(outRaster, gages, out_frxst_linkIDs, "NEAREST")
-        frxst_linkID = {int(row[-1]):int(row[1]) for row in arcpy.da.SearchCursor(out_frxst_linkIDs, '*')}  # Dictionary of LINKID:forecast point for all forecast points
+        if ArcProduct == 'ArcGISPro':
+
+            # Seems necessary to save to a local directory or into a GeoTiff format.
+            outRaster.save(os.path.join(projdir, 'outRaster.tif'))
+            gages.save(os.path.join(projdir, 'gages.tif'))
+
+            # Input forecast points raster must be forecast point IDs and NoData only
+            out_frxst_linkIDs = os.path.join('in_memory', 'frxst_linkIDs')
+            Sample([outRaster], gages, out_frxst_linkIDs, "NEAREST", "", "", "", "", "", "", "", "FEATURE_CLASS")
+
+            # Dictionary of LINKID:forecast point for all forecast points
+            frxst_linkID = {int(row[-1]):int(row[2]) for row in arcpy.da.SearchCursor(out_frxst_linkIDs, '*')}
+
+        else:
+            # Input forecast points raster must be forecast point IDs and NoData only
+            out_frxst_linkIDs = os.path.join('in_memory', 'frxst_linkIDs')
+            Sample(outRaster, gages, out_frxst_linkIDs, "NEAREST")
+
+            # Dictionary of LINKID:forecast point for all forecast points
+            frxst_linkID = {int(row[-1]):int(row[1]) for row in arcpy.da.SearchCursor(out_frxst_linkIDs, '*')}
 
         # Clean up
         arcpy.Delete_management(gages)
@@ -2966,6 +2984,13 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
     printMessages(arcpy, ['Beginning to build 2D groundwater basin inputs'])
     printMessages(arcpy, ['  Building groundwater inputs using {0}'.format(in_method)])
 
+    rootgrp1 = netCDF4.Dataset(in_nc, 'r')
+    if LooseVersion(netCDF4.__version__) > LooseVersion('1.4.0'):
+        rootgrp1.set_auto_mask(False)                                           # Change masked arrays to old default (numpy arrays always returned)
+
+    # Reset environment settings to default settings.
+    arcpy.ResetEnvironments()
+
     # Set environments
     arcpy.env.overwriteOutput = True
     arcpy.env.workspace = projdir
@@ -2976,11 +3001,6 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
     # Select a location to store outputs
     #scratchdir = projdir
     scratchdir = 'in_memory'
-
-    # Open input FullDom file
-    rootgrp1 = netCDF4.Dataset(in_nc, 'r')                                      # Read-only on FullDom file
-    if LooseVersion(netCDF4.__version__) > LooseVersion('1.4.0'):
-        rootgrp1.set_auto_mask(False)                                        # Change masked arrays to old default (numpy arrays always returned)
 
     try:
         # Determine which method will be used to generate groundwater bucket grid
@@ -3053,15 +3073,17 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
             else:
                 printMessages(arcpy, ['    LINKID exists in FullDom file.'])
                 for ncvarname in ['LINKID', 'FLOWDIRECTION']:
+                    nc_rasterloc = os.path.join(scratchdir, ncvarname+'.tif')
+                    printMessages(arcpy, ['    Building grid object from numpy array {0}'.format(ncvarname)])
                     nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables[ncvarname][:]))
-                    nc_raster.save(os.path.join(scratchdir, ncvarname))
-                    arcpy.CalculateStatistics_management(nc_raster)
-                    arcpy.env.snapRaster = nc_raster
+                    nc_raster.save(nc_rasterloc)
+                    arcpy.CalculateStatistics_management(nc_rasterloc)
+                    arcpy.env.snapRaster = nc_rasterloc
                     if ncvarname == 'LINKID':
                         strm = SetNull(nc_raster, nc_raster, 'VALUE = %s' %NoDataVal)
                         strm.save(os.path.join(scratchdir, 'strm'))
                     elif ncvarname == 'FLOWDIRECTION':
-                        fdir = Int(nc_raster)
+                        fdir = Int(nc_rasterloc)
 
                 # Gather projection and set output coordinate system
                 descData = arcpy.Describe(strm)
@@ -3073,13 +3095,15 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
             GWBasns.save(os.path.join(scratchdir, 'gw_basns2'))
             arcpy.Delete_management(strm)
             arcpy.Delete_management(fdir)
-            arcpy.Delete_management(nc_raster)
+            arcpy.Delete_management(os.path.join(scratchdir, 'LINKID.tif'))
+            arcpy.Delete_management(os.path.join(scratchdir, 'FLOWDIRECTION.tif'))
             del strm, fdir, nc_raster, ncvarname
             printMessages(arcpy, ['    Stream to features step complete.'])
 
         elif in_method == 'Polygon Shapefile or Feature Class':
             printMessages(arcpy, ['    Polygon Shapefile input: {0}'.format(in_Polys)])
             nc_raster = grid_obj.numpy_to_Raster(arcpy, numpy.array(rootgrp1.variables['TOPOGRAPHY'][:]))
+            nc_raster.save(os.path.join(scratchdir, 'TOPOGRAPHY'))
             arcpy.CalculateStatistics_management(nc_raster)
 
             # Gather projection and set output coordinate system
@@ -3099,12 +3123,13 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
 
         GWBasns_arr = arcpy.RasterToNumPyArray(GWBasns)                         # Create array from raster
         rootgrp1.close()
-        printMessages(arcpy, ['Finished building groundwater basin grids in %3.2f seconds' %(time.time()-tic1)])
+        printMessages(arcpy, ['Finished building groundwater basin grids in {0:3.2f} seconds'.format(time.time()-tic1)])
         del sr, descData
 
-    except:
+    except Exception as e:
         rootgrp1.close()
-        printMessages(arcpy, ['Finished building groundwater basin grids in %3.2f seconds' %(time.time()-tic1)])
+        printMessages(arcpy, ['Error building groundwater basin grids in {0:3.2f} seconds'.format(time.time()-tic1)])
+        printMessages(arcpy, ['\t{0}'.format(e)])
         raise SystemExit
 
     del arcpy, rootgrp1, tic1
@@ -3221,6 +3246,8 @@ def sa_functions(arcpy,
     """The last major function in the processing chain is to perform the spatial
     analyst functions to hydrologically process the input raster datasets."""
 
+    # Reset environment settings to default settings.
+    #arcpy.ResetEnvironments()
     arcpy.env.overwriteOutput = True
 
     # Fourth part of the process
