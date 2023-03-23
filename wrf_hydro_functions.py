@@ -2093,31 +2093,39 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
     if gages is not None:
         printMessages(arcpy, ['        Adding forecast points:LINKID association.'])
 
-        # Sample the LINKID value for each forecast point. Result is a table
-        if ArcProduct == 'ArcGISPro':
+        # Use numpy to obtain the gage to linkID association. Added by KMS 3/23/2023
+        linkid_arr = arcpy.RasterToNumPyArray(outRaster, nodata_to_value=NoDataVal)
+        gauge_arr = arcpy.RasterToNumPyArray(gages, nodata_to_value=NoDataVal)
+        gauge_uniques = numpy.unique(gauge_arr[gauge_arr!=NoDataVal])
+        frxst_linkID = {gauge:linkid_arr[gauge_arr==gauge][0] for gauge in gauge_uniques}
+        out_frxst_linkIDs = None
+        del linkid_arr, gauge_arr, gauge_uniques
 
-            # Seems necessary to save to a local directory or into a GeoTiff format.
-            outRaster.save(os.path.join(projdir, 'outRaster.tif'))
-            gages.save(os.path.join(projdir, 'gages.tif'))
-
-            # Input forecast points raster must be forecast point IDs and NoData only
-            out_frxst_linkIDs = os.path.join('in_memory', 'frxst_linkIDs')
-            Sample([outRaster], gages, out_frxst_linkIDs, "NEAREST", "", "", "", "", "", "", "", "FEATURE_CLASS")
-
-            # Dictionary of LINKID:forecast point for all forecast points
-            frxst_linkID = {int(row[-1]):int(row[2]) for row in arcpy.da.SearchCursor(out_frxst_linkIDs, '*')}
-
-        else:
-            # Input forecast points raster must be forecast point IDs and NoData only
-            out_frxst_linkIDs = os.path.join('in_memory', 'frxst_linkIDs')
-            Sample(outRaster, gages, out_frxst_linkIDs, "NEAREST")
-
-            # Dictionary of LINKID:forecast point for all forecast points
-            frxst_linkID = {int(row[-1]):int(row[1]) for row in arcpy.da.SearchCursor(out_frxst_linkIDs, '*')}
+        ##        # Sample the LINKID value for each forecast point. Result is a table
+        ##        if ArcProduct == 'ArcGISPro':
+        ##
+        ##            # Seems necessary to save to a local directory or into a GeoTiff format.
+        ##            outRaster.save(os.path.join(projdir, 'outRaster.tif'))
+        ##            gages.save(os.path.join(projdir, 'gages.tif'))
+        ##
+        ##            # Input forecast points raster must be forecast point IDs and NoData only
+        ##            out_frxst_linkIDs = os.path.join('in_memory', 'frxst_linkIDs')
+        ##            Sample([outRaster], gages, out_frxst_linkIDs, "NEAREST", "", "", "", "", "", "", "", "FEATURE_CLASS")
+        ##
+        ##            # Dictionary of LINKID:forecast point for all forecast points
+        ##            frxst_linkID = {int(row[-1]):int(row[2]) for row in arcpy.da.SearchCursor(out_frxst_linkIDs, '*')}
+        ##
+        ##        else:
+        ##            # Input forecast points raster must be forecast point IDs and NoData only
+        ##            out_frxst_linkIDs = os.path.join('in_memory', 'frxst_linkIDs')
+        ##            Sample(outRaster, gages, out_frxst_linkIDs, "NEAREST")
+        ##
+        ##            # Dictionary of LINKID:forecast point for all forecast points
+        ##            frxst_linkID = {int(row[-1]):int(row[1]) for row in arcpy.da.SearchCursor(out_frxst_linkIDs, '*')}
 
         # Clean up
         arcpy.Delete_management(gages)
-        arcpy.Delete_management(out_frxst_linkIDs)
+        #arcpy.Delete_management(out_frxst_linkIDs)
         printMessages(arcpy, ['        Found {0} forecast point:LINKID associations.'.format(len(frxst_linkID))])
         del gages, out_frxst_linkIDs
 
