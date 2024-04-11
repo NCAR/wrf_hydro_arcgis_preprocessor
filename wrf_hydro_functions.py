@@ -3007,8 +3007,8 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
     sr = grid_obj.proj
 
     # Select a location to store outputs
-    #scratchdir = projdir
-    scratchdir = 'in_memory'
+    scratchdir = projdir
+    #scratchdir = 'in_memory'
 
     try:
         # Determine which method will be used to generate groundwater bucket grid
@@ -3028,8 +3028,8 @@ def build_GW_Basin_Raster(arcpy, in_nc, projdir, in_method, grid_obj, in_Polys=N
                 printMessages(arcpy, ['    Generating LINKID grid from CHANNELGRID and FLOWDIRECTION'])
 
                 # In-memory files
-                outStreams_ = os.path.join(scratchdir, 'Streams')
-                outRaster = os.path.join(scratchdir, 'LINKID')
+                outStreams_ = os.path.join('in_memory', 'Streams')              # Modified from scratchdir to 'in_memory'
+                outRaster = os.path.join('in_memory', 'LINKID')                 # Modified from scratchdir to 'in_memory'
 
                 # Read Fulldom file variable to raster layer
                 for ncvarname in ['CHANNELGRID', 'FLOWDIRECTION']:
@@ -4276,9 +4276,9 @@ def fill_wrfinput_ncdfpy(arcpy, rootgrp_in, rootgrp_out, laimo=8):
     # SOILTEMP will show 0 value over water. This can cause issues when varying land cover fields
     # from default. Setting to mean non-zero values for now to have something reasonable.
     if fix_zero_over_water:
-        soilT_mask = soilT<100                                                      # Create a mask of 'invalid' soil temperature values. All values <100K on SOILTEMP grid
-        soilT_mask_Mean = soilT[~soilT_mask].mean()                                 # Calculate the non-NAN soil temperature mean
-        soilT[soilT_mask] = soilT_mask_Mean                                         # Replace masked values with the mean of the unmasked values
+        soilT_mask = soilT<100                                                  # Create a mask of 'invalid' soil temperature values. All values <100K on SOILTEMP grid
+        soilT_mask_Mean = soilT[~soilT_mask].mean()                             # Calculate the non-NAN soil temperature mean
+        soilT[soilT_mask] = soilT_mask_Mean                                     # Replace masked values with the mean of the unmasked values
         if soilT_mask.sum()>0:
             printMessages(arcpy, ['    Replaced {0} values in TMN with mean SOILTEMPT value ({1}).'.format(soilT_mask.sum(), soilT_mask_Mean)])
 
