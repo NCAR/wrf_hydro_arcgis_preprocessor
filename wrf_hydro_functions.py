@@ -420,6 +420,8 @@ class WRF_Hydro_Grid:
             pole_latitude = globalAtts['POLE_LAT']
         if 'POLE_LON' in globalAtts:
             pole_longitude = globalAtts['POLE_LON']
+        if 'CEN_LON' in globalAtts:
+            central_longitude = globalAtts['CEN_LON']
         if 'MOAD_CEN_LAT' in globalAtts:
             printMessages(arcpy, ['    Using MOAD_CEN_LAT for latitude of origin.'])
             latitude_of_origin = globalAtts['MOAD_CEN_LAT']         # Added 2/26/2017 by KMS
@@ -540,6 +542,13 @@ class WRF_Hydro_Grid:
 
         elif map_pro == 3:
             # Mercator Projection
+
+            # Trap nonesense values produced by WPS
+            if central_meridian >= 1e20:
+                central_meridian_val = central_longitude
+            else:
+                central_meridian_val = central_meridian
+
             Projection_String = ('PROJCS["Sphere_Mercator",'
                                  'GEOGCS["GCS_Sphere",'
                                  'DATUM["D_Sphere",'
@@ -549,13 +558,13 @@ class WRF_Hydro_Grid:
                                  'PROJECTION["Mercator"],'
                                  'PARAMETER["False_Easting",0.0],'
                                  'PARAMETER["False_Northing",0.0],'
-                                 'PARAMETER["Central_Meridian",' + str(central_meridian) + '],'
+                                 'PARAMETER["Central_Meridian",' + str(central_meridian_val) + '],'
                                  'PARAMETER["Standard_Parallel_1",' + str(standard_parallel_1) + '],'
                                  'UNIT["Meter",1.0]]')
             proj4 = ("+proj=merc +units=m +a={} +b={} +lon_0={} +lat_ts={}".format(
                 str(sphere_radius),
 				str(sphere_radius),
-				str(central_meridian),
+				str(central_meridian_val),
 				str(standard_parallel_1)))
 
         elif map_pro == 6:

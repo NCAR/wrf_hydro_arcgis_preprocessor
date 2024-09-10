@@ -5,3 +5,5 @@ ARC-GIS TOOLS FOR PREPARING WRF-HYDRO ROUTING GRIDS
 These tools are designed to help WRF-Hydro users create surface input data for WRF-Hydro. Presently these tools consist of scripts for use with the ArcGIS Geographical Information System. This is a stand-alone set of scripts which ArcGIS users can install and run locally on their own systems.  ArcGIS is a licensed and proprietary piece of software and we recognize that not all WRF-Hydro users will have access to it.
 
 The purpose of the WRF Hydro GIS Pre-Processing Tool is to create the data layers for terrestrial overland flow, subsurface flow and channel routing processes required by WRF Hydro. The outputs from these tools are geospatial and tabular data layers. This processing workflow for creating WRF-Hydro routing grids is available to users as an ArcGIS Python Toolbox. Instructions on how to install and use the stand-alone tool are provided in the .pdf file contained within the release.
+
+NOTE: Alternate tools (such as creating 2-dimensional soil properties and hydro parameters can be found in the related [WRF-Hydro Open Source GIS Pre-processing tools](https://github.com/NCAR/wrf_hydro_gis_preprocessor).

@@ -249,7 +249,7 @@ class ProcessGeogridFile(object):
 
         # Specify a channel mask input polygon layer.
         channel_mask = arcpy.Parameter(
-            displayName="Channel Mask Raster",
+            displayName="Channel Mask Raster (Mask=1, Elsewhere=NoData)",
             name="channel_mask",
             datatype="DERasterDataset",
             parameterType="Optional",
@@ -1353,10 +1353,28 @@ class Lake_Parameter_Addition(object):
         if not os.path.exists(os.path.join(projdir, 'flowacc')):
             fdir = arcpy.Raster(os.path.join(projdir, 'FLOWDIRECTION'))
             flac = FlowAccumulation(fdir, '#', data_type='FLOAT', flow_direction_type="D8")
+            add_flac = True
             del fdir
         else:
             flac = arcpy.Raster(os.path.join(projdir, 'flowacc'))
+            add_flac = False
         fill2 = arcpy.Raster(os.path.join(projdir, 'topography'))
+
+        # Test to see if StreamOrder needs to be re-derived
+        if os.path.exists(os.path.join(projdir, 'streamorder')):
+            order = arcpy.Raster(os.path.join(projdir, 'streamorder'))
+        else:
+            order == (fill2/fill2)*wrfh.NoDataVal   # Empty (nodata) array
+        if (numpy.unique(arcpy.RasterToNumPyArray(order)) == -9999).all():
+            add_stream_order = True
+            wrfh.printMessages(arcpy, ['Streamorder grid is empty. Populating'])
+            fdir = arcpy.Raster(os.path.join(projdir, 'FLOWDIRECTION'))
+            strm2 = SetNull(channelgrid, 1, "Value < 0")      # Alter channelgrid such that -9999 and -1 to be NoData
+            order = StreamOrder(strm2, fdir)         # Default = "STRAHLER"
+            order2 = Con(IsNull(order) == 1, wrfh.NoDataVal, order)
+            del fdir, order, strm2
+        else:
+            add_stream_order = False
 
         # Check to see if this was a reach-based routing domain
         if os.path.exists(os.path.join(projdir, 'LINKID')) or reach_based:
@@ -1372,7 +1390,7 @@ class Lake_Parameter_Addition(object):
         # Run the lake addition function
         arcpy, channelgrid_arr, lakegrid_arr = wrfh.add_reservoirs(arcpy, channelgrid,
             in_lakes, flac, projdir, fill2, cellsize, sr, lakeIDfield=None, Gridded=Gridded)
-        del flac, fill2, channelgrid, sr, cellsize, in_lakes, in_zip
+        del fill2, channelgrid, sr, cellsize, in_lakes, in_zip
 
         # Add new LINKID grid to the FullDom file
         rootgrp = netCDF4.Dataset(os.path.join(projdir, wrfh.FullDom), 'r+')         # Read+ object on old FullDom file
@@ -1383,6 +1401,18 @@ class Lake_Parameter_Addition(object):
             rootgrp.variables['CHANNELGRID'][:] = channelgrid_arr               # Populate variable using array
         else:
             rootgrp.variables['LAKEGRID'][:] = wrfh.NoDataVal                   # No need to populate LAKEGRID if not using gridded lakes
+        if add_flac:
+            flac_var = rootgrp.createVariable('FLOWACC', 'i4', ('y', 'x'))
+            flac_var.esri_pe_string = arcpy.Describe(flac).spatialReference.exportToString()
+            flac_var.grid_mapping = wrfh.crsVar
+            flac_var[:] = arcpy.RasterToNumPyArray(flac)        # Populate variable using array
+            wrfh.printMessages(arcpy, ['    Process: FLOWACC written to output netCDF.'])
+        del flac
+
+        if add_stream_order:
+            rootgrp.variables['STREAMORDER'][:] = arcpy.RasterToNumPyArray(order2)
+            wrfh.printMessages(arcpy, ['    Process: STREAMORDER written to output netCDF.'])
+            del order2
 
         rootgrp.close()
         del rootgrp, lakegrid_arr, channelgrid_arr
