@@ -1974,7 +1974,8 @@ def Add_Param_data_to_FC(arcpy, inNC, inFC, FCIDfield='arcid', NCIDfield='link',
         ncvarname = fieldinfo[0]
         if ncvarname == 'gages':
             tempArr = rootgrp.variables[ncvarname][:]
-            RL_arr[field] = numpy.array([item.tostring() for item in tempArr]).astype(str)
+            # replaced deprecated ".tostring()" with ".tobytes()", 9/21/26
+            RL_arr[field] = numpy.array([item.tobytes() for item in tempArr]).astype(str)
             del tempArr
         else:
             RL_arr[field] = rootgrp.variables[ncvarname][:]
