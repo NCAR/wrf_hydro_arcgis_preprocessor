@@ -2109,6 +2109,7 @@ def Routing_Table(arcpy, projdir, sr2, channelgrid, fdir, Elev, Strahler, gages=
         gauge_arr = arcpy.RasterToNumPyArray(gages, nodata_to_value=NoDataVal)
         gauge_uniques = numpy.unique(gauge_arr[gauge_arr!=NoDataVal])
         frxst_linkID = {gauge:linkid_arr[gauge_arr==gauge][0] for gauge in gauge_uniques}
+        frxst_linkID = {int(v): int(k) for k, v in frxst_linkID.items() if v != NoDataVal}
         out_frxst_linkIDs = None
         del linkid_arr, gauge_arr, gauge_uniques
 
